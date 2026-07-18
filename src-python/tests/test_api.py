@@ -1,13 +1,11 @@
-."""Basic API smoke tests."""
+"""Basic API smoke tests."""
 
-import shutil
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from keirstin_link.api import app
-from keirstin_link.config import DATA_DIR
 
 
 @pytest.fixture
@@ -46,10 +44,18 @@ def test_register_and_pull(tmp_path, client):
     assert r.json()["file"]["size"] == 5
 
 
-def test_propose_approve_flow(client):
-    r = client.post("/files/register", data={"id": "f2", "name": "x.txt", "path": "/tmp/x.txt", "size": 0})
+def test_propose_approve_flow(tmp_path, client):
+    r = client.post("/files/register", data={"id": "f2", "name": "x.txt", "path": str(tmp_path / "x.txt"), "size": 0})
     assert r.status_code == 200
-    r = client.post("/propose", data={"file_id": "f2", "payload": '{"note": "edit"}'})
+
+    src = tmp_path / "x.txt"
+    src.write_text("edited")
+    with src.open("rb") as f:
+        r = client.post(
+            "/propose",
+            data={"file_id": "f2", "payload": '{"note": "edit"}'},
+            files={"upload": ("x.txt", f, "text/plain")},
+        )
     assert r.status_code == 200
     change_id = r.json()["id"]
 
@@ -59,7 +65,7 @@ def test_propose_approve_flow(client):
 
     r = client.get("/versions/f2")
     assert r.status_code == 200
-    assert len(r.json()["versions"]) >= 1
+    assert len(r.json()["versions"]) == 1
 
 
 def test_devices_empty(client):

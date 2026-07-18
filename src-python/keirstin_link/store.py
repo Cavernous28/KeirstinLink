@@ -134,6 +134,7 @@ class PendingStore:
 
     @staticmethod
     def save_change(change: ProposedChange) -> None:
+        PendingStore._pending_path(change.id).parent.mkdir(parents=True, exist_ok=True)
         _write_json(PendingStore._pending_path(change.id), change.model_dump())
 
     @staticmethod
