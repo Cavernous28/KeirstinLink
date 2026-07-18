@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KeirstinLink</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="app-header">
+        <div class="brand">
+          <img src="assets/tauri.svg" alt="KeirstinLink" />
+          <h1>KeirstinLink</h1>
+        </div>
+        <div class="header-actions">
+          <button id="btn-refresh" class="btn">Refresh</button>
+          <button id="btn-add-device" class="btn primary">+ Add Device</button>
+        </div>
+      </header>
+
+      <nav class="tab-bar">
+        <button class="tab active" data-tab="sync">Sync</button>
+        <button class="tab" data-tab="remote">Remote Hermes</button>
+      </nav>
+
+      <main class="content">
+        <!-- Sync Tab -->
+        <section id="sync" class="tab-panel active">
+          <div class="panel-header">
+            <h2>Devices</h2>
+            <span id="device-count" class="badge">0</span>
+          </div>
+          <div id="device-list" class="card-list">
+            <p class="empty">No devices yet. Click + Add Device to pair one.</p>
+          </div>
+
+          <div class="panel-header">
+            <h2>Pending Approvals</h2>
+            <span id="approval-count" class="badge">0</span>
+          </div>
+          <div id="approval-list" class="card-list">
+            <p class="empty">No pending approvals.</p>
+          </div>
+        </section>
+
+        <!-- Remote Hermes Tab -->
+        <section id="remote" class="tab-panel">
+          <div class="panel-header">
+            <h2>Remote Hermes Instances</h2>
+            <span id="remote-count" class="badge">0</span>
+          </div>
+          <div id="remote-list" class="card-list">
+            <p class="empty">No remote Hermes connections.</p>
+          </div>
+          <div class="remote-form">
+            <h3>Connect to Remote Hermes</h3>
+            <div class="form-row">
+              <input id="remote-host" type="text" placeholder="Host (e.g. 192.168.1.10)" />
+              <input id="remote-port" type="number" placeholder="Port" value="8080" />
+              <button id="btn-connect" class="btn primary">Connect</button>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="app-footer">
+        <span id="status">Ready</span>
+      </footer>
+    </div>
+    <script type="module" src="main.js"></script>
+  </body>
+</html>
