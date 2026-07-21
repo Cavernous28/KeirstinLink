@@ -57,7 +57,7 @@
         <div class="modal-content">
           <div class="modal-header">
             <h2>Settings</h2>
-            <button id="btn-close-settings" class="btn icon">&times;</button>
+            <button id="btn-close-settings" class="btn icon">×</button>
           </div>
           <form id="settings-form">
             <label>
@@ -86,6 +86,56 @@
               <button type="button" id="btn-browse-master-folder" class="btn">Browse...</button>
               <button type="button" id="btn-open-master-folder" class="btn">Open</button>
             </label>
+
+            <div class="modal-actions">
+              <button type="submit" class="btn primary">Save</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Device modal -->
+      <div id="device-modal" class="modal">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2 id="device-modal-title">Add Device</h2>
+            <button id="btn-close-device" class="btn icon">×</button>
+          </div>
+          <form id="device-form">
+            <input type="hidden" id="device-id" />
+
+            <label>
+              <span>Name *</span>
+              <input type="text" id="device-name" placeholder="e.g. My Phone" required />
+            </label>
+
+            <label>
+              <span>Host</span>
+              <input type="text" id="device-host" placeholder="127.0.0.1" />
+            </label>
+
+            <label>
+              <span>Port</span>
+              <input type="number" id="device-port" value="3710" />
+            </label>
+
+            <label>
+              <span>Kind</span>
+              <select id="device-kind">
+                <option value="mobile">Mobile</option>
+                <option value="desktop">Desktop</option>
+                <option value="handheld">Handheld</option>
+                <option value="laptop">Laptop</option>
+              </select>
+            </label>
+
+            <label>
+              <span>Shared folders (relative to sync folder; leave blank for all)</span>
+              <input type="text" id="device-shared-folders" placeholder="e.g. obsidian, shared/photos" />
+              <button type="button" id="btn-pick-shared-folder" class="btn">Pick folder...</button>
+            </label>
+
+            <p class="hint">* Name is required.</p>
 
             <div class="modal-actions">
               <button type="submit" class="btn primary">Save</button>

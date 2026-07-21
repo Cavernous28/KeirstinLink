@@ -103,18 +103,18 @@ def scan_local(
     """Client: compare local sync folder against a remote master index and return a changeset to propose.
 
     If `remote_index_json` is provided, use it directly instead of fetching from the device.
-    This makes the endpoint testable without a running remote server.
+    Only considers files under the device's configured `shared_folders`.
     """
+    device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
     if remote_index_json:
         try:
             remote_index = json.loads(remote_index_json)
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid JSON in remote_index_json")
     else:
-        device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
-        if not device:
-            raise HTTPException(status_code=404, detail="Device not found")
-
         base_url = f"http://{device.host}:{device.port}"
         try:
             import urllib.request
@@ -126,6 +126,7 @@ def scan_local(
 
     remote_by_path = {e["relative_path"]: e for e in remote_index}
     local_root = SettingsStore.sync_folder_path()
+    allowed = _parse_shared_folders(device.shared_folders)
     changes = []
 
     for local_path in local_root.rglob("*"):
@@ -134,6 +135,8 @@ def scan_local(
         try:
             stat = local_path.stat()
             rel = str(local_path.relative_to(local_root)).replace("\\", "/")
+            if not _is_under_shared_folders(rel, allowed):
+                continue
             local_mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
             local_checksum = _hash_file(local_path)
             remote = remote_by_path.get(rel)
@@ -145,6 +148,29 @@ def scan_local(
             continue
 
     return {"device_id": device_id, "changes": changes, "count": len(changes)}
+
+
+def _parse_shared_folders(raw: list[str]) -> list[str]:
+    """Normalize shared folder entries. Empty list or ['*'] means all folders."""
+    cleaned = []
+    for entry in raw:
+        for part in entry.split(","):
+            part = part.strip().replace("\\", "/").strip("/")
+            if part:
+                cleaned.append(part)
+    if not cleaned or cleaned == ["*"]:
+        return []
+    return cleaned
+
+
+def _is_under_shared_folders(rel_path: str, folders: list[str]) -> bool:
+    """Return True if rel_path is inside one of the configured shared folders (or if no folders configured)."""
+    if not folders:
+        return True
+    for folder in folders:
+        if rel_path == folder or rel_path.startswith(folder + "/"):
+            return True
+    return False
 
 
 @app.post("/folder-index/rebuild")
@@ -190,11 +216,15 @@ def pull_device(device_id: str = Form(...)) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=f"Could not fetch folder index from {base_url}: {e}")
 
     local_root = SettingsStore.sync_folder_path()
+    allowed = _parse_shared_folders(device.shared_folders)
     pulled = []
     skipped = []
 
     for remote_entry in remote_index:
         rel_path = remote_entry["relative_path"]
+        if not _is_under_shared_folders(rel_path, allowed):
+            continue
+
         local_path = (local_root / rel_path).resolve()
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -432,6 +462,7 @@ def register_device(
     host: str = Form("127.0.0.1"),
     port: int = Form(3710),
     capabilities: str = Form(""),
+    shared_folders: str = Form(""),
 ) -> dict[str, Any]:
     device = DeviceInfo(
         id=id,
@@ -439,7 +470,34 @@ def register_device(
         host=host,
         port=port,
         capabilities=[c.strip() for c in capabilities.split(",") if c.strip()],
+        shared_folders=[f.strip().replace("\\", "/").strip("/") for f in shared_folders.split(",") if f.strip()],
     )
+    DeviceStore.upsert_device(device)
+    return device.model_dump()
+
+
+@app.put("/devices/{device_id}")
+def update_device(
+    device_id: str,
+    name: str = Form(""),
+    host: str = Form(""),
+    port: int = Form(0),
+    capabilities: str = Form(""),
+    shared_folders: str = Form(""),
+) -> dict[str, Any]:
+    device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    if name:
+        device.name = name
+    if host:
+        device.host = host
+    if port > 0:
+        device.port = port
+    if capabilities:
+        device.capabilities = [c.strip() for c in capabilities.split(",") if c.strip()]
+    if shared_folders:
+        device.shared_folders = [f.strip().replace("\\", "/").strip("/") for f in shared_folders.split(",") if f.strip()]
     DeviceStore.upsert_device(device)
     return device.model_dump()
 

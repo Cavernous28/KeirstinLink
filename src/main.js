@@ -11,8 +11,25 @@ const state = {
 function $(sel) { return document.querySelector(sel); }
 function $$(sel) { return document.querySelectorAll(sel); }
 
-function setStatus(msg) {
+let statusLockedUntil = 0;
+
+function setStatus(msg, lockSeconds = 0) {
+  const now = Date.now();
+  if (now < statusLockedUntil) return;
   $('#status').textContent = msg;
+  if (lockSeconds > 0) {
+    statusLockedUntil = now + lockSeconds * 1000;
+  }
+}
+
+function setError(msg) {
+  setStatus(msg, 10);
+}
+
+function errorMessage(e) {
+  if (e && typeof e.message === 'string' && e.message) return e.message;
+  if (e && typeof e === 'string') return e;
+  return String(e || 'Unknown error');
 }
 
 function render() {
@@ -33,10 +50,12 @@ function renderDevices() {
       <div class="card-info">
         <p class="card-title">${escapeHtml(d.name || 'Unknown')}</p>
         <p class="card-meta">${escapeHtml(d.host || 'unknown')}:${d.port || 0} • ${escapeHtml((d.capabilities || []).join(', ') || 'device')}</p>
+        <p class="card-meta">Shared: ${escapeHtml((d.shared_folders || []).join(', ') || 'all')}</p>
       </div>
       <div class="card-actions">
         <button class="btn" data-action="propose" data-id="${d.id}">Propose</button>
         <button class="btn" data-action="sync" data-id="${d.id}">Sync</button>
+        <button class="btn" data-action="edit-device" data-id="${d.id}">Edit</button>
         <button class="btn danger" data-action="remove-device" data-id="${d.id}">Remove</button>
       </div>
     </div>
@@ -110,7 +129,7 @@ async function openSettings() {
     $('#setting-master-folder').value = s.master_sync_folder || '';
   } catch (e) {
     console.error(e);
-    setStatus('Could not load settings: ' + e.message);
+    setError('Could not load settings: ' + errorMessage(e));
   }
   $('#settings-modal').classList.add('open');
 }
@@ -134,7 +153,7 @@ async function saveSettings(e) {
     setStatus('Settings saved.');
   } catch (err) {
     console.error(err);
-    setStatus('Save settings failed: ' + err.message);
+    setError('Save settings failed: ' + errorMessage(err));
   }
 }
 
@@ -144,7 +163,7 @@ async function browseFolder() {
     if (selected) $('#setting-folder').value = selected;
   } catch (e) {
     console.error(e);
-    setStatus('Browse folder failed: ' + e.message);
+    setError('Browse folder failed: ' + errorMessage(e));
   }
 }
 
@@ -155,7 +174,7 @@ async function openFolder() {
     await invoke('open_folder', { path });
   } catch (e) {
     console.error(e);
-    setStatus('Open folder failed: ' + e.message);
+    setError('Open folder failed: ' + errorMessage(e));
   }
 }
 
@@ -165,7 +184,7 @@ async function browseMasterFolder() {
     if (selected) $('#setting-master-folder').value = selected;
   } catch (e) {
     console.error(e);
-    setStatus('Browse folder failed: ' + e.message);
+    setError('Browse folder failed: ' + errorMessage(e));
   }
 }
 
@@ -176,7 +195,94 @@ async function openMasterFolder() {
     await invoke('open_folder', { path });
   } catch (e) {
     console.error(e);
-    setStatus('Open folder failed: ' + e.message);
+    setError('Open folder failed: ' + errorMessage(e));
+  }
+}
+
+// Device modal
+let editingDeviceId = null;
+
+function openAddDevice() {
+  editingDeviceId = null;
+  $('#device-modal-title').textContent = 'Add Device';
+  $('#device-id').value = '';
+  $('#device-name').value = '';
+  $('#device-host').value = '127.0.0.1';
+  $('#device-port').value = '3710';
+  $('#device-kind').value = 'mobile';
+  $('#device-shared-folders').value = '';
+  $('#device-modal').classList.add('open');
+}
+
+function generateDeviceId(name) {
+  const base = (name || 'device').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const suffix = Math.floor(Math.random() * 10000);
+  return `${base}-${suffix}`;
+}
+
+function openEditDevice(id) {
+  const d = state.devices.find(x => x.id === id);
+  if (!d) return;
+  editingDeviceId = id;
+  $('#device-modal-title').textContent = 'Edit Device';
+  $('#device-id').value = d.id || '';
+  $('#device-name').value = d.name || '';
+  $('#device-host').value = d.host || '127.0.0.1';
+  $('#device-port').value = String(d.port || 3710);
+  $('#device-kind').value = (d.capabilities && d.capabilities[0]) || 'mobile';
+  $('#device-shared-folders').value = (d.shared_folders || []).join(', ');
+  $('#device-modal').classList.add('open');
+}
+
+function closeDeviceModal() {
+  $('#device-modal').classList.remove('open');
+  editingDeviceId = null;
+}
+
+async function saveDevice(e) {
+  e.preventDefault();
+  const rawId = editingDeviceId || $('#device-id').value.trim();
+  const name = $('#device-name').value.trim() || 'New Device';
+  const payload = {
+    id: rawId || generateDeviceId(name),
+    name: name,
+    host: $('#device-host').value.trim() || '127.0.0.1',
+    port: parseInt($('#device-port').value || '3710', 10),
+    kind: $('#device-kind').value,
+    shared_folders: $('#device-shared-folders').value.trim(),
+  };
+  try {
+    const command = editingDeviceId ? 'update_device' : 'add_device';
+    await invoke(command, { payload });
+    closeDeviceModal();
+    await refresh();
+    setStatus(editingDeviceId ? 'Device updated.' : 'Device added.');
+  } catch (err) {
+    console.error(err);
+    setError('Save device failed: ' + errorMessage(err));
+  }
+}
+
+async function pickSharedFolder() {
+  try {
+    const selected = await invoke('pick_folder');
+    if (!selected) return;
+    // Convert absolute path to relative path inside sync folder
+    const syncRoot = ($('#setting-folder').value.trim() || state.settings.sync_folder || '').replace(/\\/g, '/');
+    const abs = selected.replace(/\\/g, '/');
+    let rel = abs;
+    if (syncRoot && abs.toLowerCase().startsWith(syncRoot.toLowerCase() + '/')) {
+      rel = abs.slice(syncRoot.length + 1);
+    } else {
+      setError(`Pick a folder inside the sync folder (${syncRoot || 'not set'}). Absolute paths outside it won't sync.`);
+      return;
+    }
+    const input = $('#device-shared-folders');
+    const current = input.value.trim();
+    input.value = current ? `${current}, ${rel}` : rel;
+  } catch (e) {
+    console.error(e);
+    setError('Pick shared folder failed: ' + errorMessage(e));
   }
 }
 
@@ -192,29 +298,7 @@ async function refresh() {
     setStatus(`Loaded ${state.devices.length} devices, ${state.pending.length} pending, ${state.files.length} files`);
   } catch (e) {
     console.error(e);
-    setStatus('Refresh failed: ' + e.message);
-  }
-}
-
-async function addDevice() {
-  const name = prompt('Device name:');
-  if (!name) return;
-  try {
-    await invoke('add_device', { payload: { name, kind: 'mobile' } });
-    await refresh();
-  } catch (e) {
-    console.error(e);
-    setStatus('Add device failed: ' + e.message);
-  }
-}
-
-async function approve(id, approved) {
-  try {
-    await invoke('approve_device', { payload: { id, approved } });
-    await refresh();
-  } catch (e) {
-    console.error(e);
-    setStatus('Approval failed: ' + e.message);
+    setError('Refresh failed: ' + errorMessage(e));
   }
 }
 
@@ -225,7 +309,17 @@ async function removeDevice(id) {
     await refresh();
   } catch (e) {
     console.error(e);
-    setStatus('Remove failed: ' + e.message);
+    setError('Remove failed: ' + errorMessage(e));
+  }
+}
+
+async function approve(id, approved) {
+  try {
+    await invoke('approve_device', { payload: { id, approved } });
+    await refresh();
+  } catch (e) {
+    console.error(e);
+    setError('Approval failed: ' + errorMessage(e));
   }
 }
 
@@ -246,7 +340,7 @@ async function syncDevice(id) {
     }
   } catch (e) {
     console.error(e);
-    setStatus('Sync failed: ' + e.message);
+    setError('Sync failed: ' + errorMessage(e));
   }
 }
 
@@ -263,7 +357,7 @@ async function proposeDevice(id) {
     }
   } catch (e) {
     console.error(e);
-    setStatus('Propose failed: ' + e.message);
+    setError('Propose failed: ' + errorMessage(e));
   }
 }
 
@@ -272,14 +366,17 @@ function init() {
   $$('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
 
   $('#btn-refresh').addEventListener('click', refresh);
-  $('#btn-add-device').addEventListener('click', addDevice);
+  $('#btn-add-device').addEventListener('click', openAddDevice);
   $('#btn-settings').addEventListener('click', openSettings);
   $('#btn-close-settings').addEventListener('click', closeSettings);
+  $('#btn-close-device').addEventListener('click', closeDeviceModal);
   $('#btn-browse-folder').addEventListener('click', browseFolder);
   $('#btn-open-folder').addEventListener('click', openFolder);
   $('#btn-browse-master-folder').addEventListener('click', browseMasterFolder);
   $('#btn-open-master-folder').addEventListener('click', openMasterFolder);
+  $('#btn-pick-shared-folder').addEventListener('click', pickSharedFolder);
   $('#settings-form').addEventListener('submit', saveSettings);
+  $('#device-form').addEventListener('submit', saveDevice);
 
   document.addEventListener('click', e => {
     const btn = e.target.closest('[data-action]');
@@ -288,6 +385,7 @@ function init() {
     const id = btn.dataset.id;
     if (action === 'approve') approve(id, btn.dataset.approve === 'true');
     else if (action === 'remove-device') removeDevice(id);
+    else if (action === 'edit-device') openEditDevice(id);
     else if (action === 'sync') syncDevice(id);
     else if (action === 'propose') proposeDevice(id);
   });

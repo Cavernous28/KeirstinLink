@@ -17,8 +17,12 @@ struct UiState {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct DeviceAddPayload {
+    id: String,
     name: String,
+    host: String,
+    port: u16,
     kind: String,
+    shared_folders: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -124,6 +128,17 @@ fn http_post_form(path: &str, form: &[(String, String)]) -> Result<serde_json::V
         .map_err(|e| format!("failed to parse JSON from {}: {}", url, e))
 }
 
+fn http_put_form(path: &str, form: &[(String, String)]) -> Result<serde_json::Value, String> {
+    let url = format!("{}{}", PY_BASE_URL, path);
+    let form_slice: Vec<(&str, &str)> = form.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    ureq::put(&url)
+        .timeout(Duration::from_secs(10))
+        .send_form(&form_slice)
+        .map_err(|e| format!("HTTP PUT {} failed: {}", url, e))?
+        .into_json()
+        .map_err(|e| format!("failed to parse JSON from {}: {}", url, e))
+}
+
 fn http_delete(path: &str) -> Result<serde_json::Value, String> {
     let url = format!("{}{}", PY_BASE_URL, path);
     ureq::delete(&url)
@@ -145,15 +160,35 @@ fn get_state() -> Result<UiState, String> {
 
 #[tauri::command]
 fn add_device(payload: DeviceAddPayload) -> Result<serde_json::Value, String> {
-    let id = format!("dev-{}", rand::random::<u32>());
+    let id = if payload.id.is_empty() {
+        format!("dev-{}", rand::random::<u32>())
+    } else {
+        payload.id
+    };
     http_post_form(
         "/devices",
         &[
             ("id".to_string(), id),
             ("name".to_string(), payload.name),
-            ("host".to_string(), "127.0.0.1".to_string()),
-            ("port".to_string(), "3710".to_string()),
+            ("host".to_string(), payload.host),
+            ("port".to_string(), payload.port.to_string()),
             ("capabilities".to_string(), payload.kind),
+            ("shared_folders".to_string(), payload.shared_folders),
+        ],
+    )
+}
+
+#[tauri::command]
+fn update_device(payload: DeviceAddPayload) -> Result<serde_json::Value, String> {
+    let id = urlencoding::encode(&payload.id);
+    http_put_form(
+        &format!("/devices/{}", id),
+        &[
+            ("name".to_string(), payload.name),
+            ("host".to_string(), payload.host),
+            ("port".to_string(), payload.port.to_string()),
+            ("capabilities".to_string(), payload.kind),
+            ("shared_folders".to_string(), payload.shared_folders),
         ],
     )
 }
@@ -285,6 +320,7 @@ pub fn run() {
             get_settings,
             save_settings,
             add_device,
+            update_device,
             remove_device,
             approve_device,
             sync_device,

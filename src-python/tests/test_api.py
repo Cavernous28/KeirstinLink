@@ -273,3 +273,44 @@ def test_propose_files_http_loopback(tmp_path, monkeypatch):
             proc.kill()
             proc.wait()
 
+def test_scan_local_respects_shared_folders(tmp_path, client):
+    """Only files under the device's shared_folders should be proposed."""
+    master = tmp_path / "master"
+    master.mkdir()
+    client_dir = tmp_path / "client"
+    client_dir.mkdir()
+    client.post("/settings", data={"device_name": "Master", "mode": "master", "sync_folder": str(client_dir), "master_sync_folder": str(master)})
+
+    # Device only shares the obsidian folder
+    client.post("/devices", data={
+        "id": "dev-phone",
+        "name": "Phone",
+        "host": "127.0.0.1",
+        "port": "3710",
+        "capabilities": "mobile",
+        "shared_folders": "obsidian, shared/photos",
+    })
+
+    (client_dir / "obsidian" / "note.md").parent.mkdir(parents=True)
+    (client_dir / "obsidian" / "note.md").write_text("note")
+    (client_dir / "shared" / "photos" / "pic.jpg").parent.mkdir(parents=True)
+    (client_dir / "shared" / "photos" / "pic.jpg").write_text("pic")
+    (client_dir / "hermes" / "todo.md").parent.mkdir(parents=True)
+    (client_dir / "hermes" / "todo.md").write_text("todo")
+
+    r = client.post("/scan-local", data={"device_id": "dev-phone", "remote_index_json": json.dumps([])})
+    assert r.status_code == 200
+    scan = r.json()
+    paths = {c["relative_path"] for c in scan["changes"]}
+    assert "obsidian/note.md" in paths
+    assert "shared/photos/pic.jpg" in paths
+    assert "hermes/todo.md" not in paths
+
+def test_update_device_shared_folders(tmp_path, client):
+    client.post("/devices", data={"id": "dev-edit", "name": "Old", "host": "127.0.0.1", "port": "3710", "capabilities": "mobile"})
+    r = client.put("/devices/dev-edit", data={"name": "New", "shared_folders": "obsidian, shared"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["name"] == "New"
+    assert data["shared_folders"] == ["obsidian", "shared"]
+

@@ -56,3 +56,4 @@ class DeviceInfo(BaseModel):
     port: int
     last_seen: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     capabilities: list[str] = Field(default_factory=list)
+    shared_folders: list[str] = Field(default_factory=list)
