@@ -139,15 +139,45 @@ async function saveSettings(e) {
 }
 
 async function browseFolder() {
-  const current = $('#setting-folder').value.trim();
-  const path = prompt('Enter sync folder path:', current);
-  if (path) $('#setting-folder').value = path;
+  try {
+    const selected = await invoke('pick_folder');
+    if (selected) $('#setting-folder').value = selected;
+  } catch (e) {
+    console.error(e);
+    setStatus('Browse folder failed: ' + e.message);
+  }
+}
+
+async function openFolder() {
+  const path = $('#setting-folder').value.trim();
+  if (!path) return setStatus('No sync folder set');
+  try {
+    await invoke('open_folder', { path });
+  } catch (e) {
+    console.error(e);
+    setStatus('Open folder failed: ' + e.message);
+  }
 }
 
 async function browseMasterFolder() {
-  const current = $('#setting-master-folder').value.trim();
-  const path = prompt('Enter master sync folder path:', current);
-  if (path) $('#setting-master-folder').value = path;
+  try {
+    const selected = await invoke('pick_folder');
+    if (selected) $('#setting-master-folder').value = selected;
+  } catch (e) {
+    console.error(e);
+    setStatus('Browse folder failed: ' + e.message);
+  }
+}
+
+async function openMasterFolder() {
+  const path = $('#setting-master-folder').value.trim();
+  if (!path) return setStatus('No master folder set');
+  try {
+    await invoke('open_folder', { path });
+  } catch (e) {
+    console.error(e);
+    setStatus('Open folder failed: ' + e.message);
+  }
 }
 
 async function refresh() {
@@ -246,7 +276,9 @@ function init() {
   $('#btn-settings').addEventListener('click', openSettings);
   $('#btn-close-settings').addEventListener('click', closeSettings);
   $('#btn-browse-folder').addEventListener('click', browseFolder);
+  $('#btn-open-folder').addEventListener('click', openFolder);
   $('#btn-browse-master-folder').addEventListener('click', browseMasterFolder);
+  $('#btn-open-master-folder').addEventListener('click', openMasterFolder);
   $('#settings-form').addEventListener('submit', saveSettings);
 
   document.addEventListener('click', e => {

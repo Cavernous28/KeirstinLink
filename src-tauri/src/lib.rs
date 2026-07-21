@@ -3,6 +3,7 @@ use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
 
 const PY_BASE_URL: &str = "http://127.0.0.1:3710";
 const PY_START_TIMEOUT_SECONDS: u64 = 15;
@@ -217,6 +218,24 @@ fn get_folder_index() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+fn open_folder(path: String) -> Result<(), String> {
+    tauri_plugin_opener::open_path(path, None::<&str>)
+        .map_err(|e| format!("failed to open folder: {}", e))
+}
+
+#[tauri::command]
+async fn pick_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    tauri_plugin_dialog::FileDialogBuilder::new(app.dialog().clone())
+        .pick_folder(move |path| {
+            let _ = tx.send(path.map(|p| p.to_string()));
+        });
+    rx.recv()
+        .map_err(|e| format!("dialog channel closed: {}", e))
+        .map(|opt| opt)
+}
+
+#[tauri::command]
 fn connect_remote(payload: ConnectRemotePayload) -> Result<serde_json::Value, String> {
     let _ = payload;
     Ok(serde_json::json!({"status": "stub"}))
@@ -238,6 +257,7 @@ fn sync_remote(payload: ByIdPayload) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(BackendState { child: Mutex::new(None) })
         .setup(|app| {
             let handle = app.app_handle().clone();
@@ -270,6 +290,8 @@ pub fn run() {
             sync_device,
             propose_device,
             get_folder_index,
+            open_folder,
+            pick_folder,
             connect_remote,
             disconnect_remote,
             sync_remote
