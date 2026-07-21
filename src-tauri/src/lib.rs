@@ -42,10 +42,13 @@ struct BackendState {
 }
 
 fn project_root() -> std::path::PathBuf {
-    // In dev, Tauri src-tauri is at <root>/src-tauri; in packaged builds this will differ.
+    // Walk up from the executable until we find a directory containing src-python.
     let exe = std::env::current_exe().unwrap_or_default();
-    if let Some(dir) = exe.ancestors().nth(2) {
-        return dir.to_path_buf();
+    let start = if exe.is_file() { exe.parent().unwrap_or(&exe).to_path_buf() } else { exe };
+    for ancestor in start.ancestors() {
+        if ancestor.join("src-python").is_dir() {
+            return ancestor.to_path_buf();
+        }
     }
     std::env::current_dir().unwrap_or_default()
 }

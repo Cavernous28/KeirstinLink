@@ -153,6 +153,8 @@ function init() {
   });
 
   refresh();
+  // Auto-refresh every 3s so the UI stays in sync with the backend
+  setInterval(refresh, 3000);
 }
 
 init();

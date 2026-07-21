@@ -6,7 +6,7 @@
   "scripts": {
     "start:bridge": "node bridge/server.js",
     "start:client": "node bridge/client.js",
-    "dev": "nodemon bridge/server.js",
+    "dev": "cargo tauri dev",
     "test": "echo \"Tests not yet implemented\" && exit 0"
   },
   "keywords": [
