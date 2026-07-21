@@ -30,6 +30,14 @@ class VersionSnapshot(BaseModel):
     note: Optional[str] = None
 
 
+class ProposedFileChange(BaseModel):
+    relative_path: str
+    action: str  # "create" | "update" | "delete"
+    checksum: Optional[str] = None
+    size: int = 0
+    modified: str = ""
+
+
 class ProposedChange(BaseModel):
     id: str
     file_id: str
@@ -37,6 +45,8 @@ class ProposedChange(BaseModel):
     created: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     payload: dict[str, Any] = Field(default_factory=dict)
     source_device: Optional[str] = None
+    relative_path: Optional[str] = None
+    action: Optional[str] = None  # convenience from payload
 
 
 class DeviceInfo(BaseModel):

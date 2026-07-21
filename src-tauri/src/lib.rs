@@ -169,16 +169,41 @@ fn approve_device(payload: ApprovePayload) -> Result<serde_json::Value, String> 
 }
 
 #[tauri::command]
-fn sync_device(payload: ByIdPayload) -> Result<(), String> {
-    let _ = payload;
-    // TODO: trigger real pull/propose
-    Ok(())
+fn get_settings() -> Result<serde_json::Value, String> {
+    http_get("/settings")
+}
+
+#[tauri::command]
+fn save_settings(payload: serde_json::Value) -> Result<serde_json::Value, String> {
+    let mut form: Vec<(String, String)> = Vec::new();
+    if let Some(v) = payload.get("device_name").and_then(|x| x.as_str()) {
+        form.push(("device_name".to_string(), v.to_string()));
+    }
+    if let Some(v) = payload.get("mode").and_then(|x| x.as_str()) {
+        form.push(("mode".to_string(), v.to_string()));
+    }
+    if let Some(v) = payload.get("sync_folder").and_then(|x| x.as_str()) {
+        form.push(("sync_folder".to_string(), v.to_string()));
+    }
+    if let Some(v) = payload.get("master_sync_folder").and_then(|x| x.as_str()) {
+        form.push(("master_sync_folder".to_string(), v.to_string()));
+    }
+    http_post_form("/settings", &form)
+}
+
+#[tauri::command]
+fn sync_device(payload: ByIdPayload) -> Result<serde_json::Value, String> {
+    http_post_form("/pull", &[("device_id".to_string(), payload.id)])
+}
+
+#[tauri::command]
+fn get_folder_index() -> Result<serde_json::Value, String> {
+    http_get("/folder-index")
 }
 
 #[tauri::command]
 fn connect_remote(payload: ConnectRemotePayload) -> Result<serde_json::Value, String> {
     let _ = payload;
-    // TODO: real remote Hermes connection
     Ok(serde_json::json!({"status": "stub"}))
 }
 
@@ -222,10 +247,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
+            get_settings,
+            save_settings,
             add_device,
             remove_device,
             approve_device,
             sync_device,
+            get_folder_index,
             connect_remote,
             disconnect_remote,
             sync_remote

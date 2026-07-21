@@ -1,5 +1,6 @@
 """Configuration for KeirstinLink backend."""
 
+import json
 import os
 from pathlib import Path
 
@@ -17,6 +18,9 @@ FILES_INDEX = DATA_DIR / "files_index.json"
 PENDING_DIR = DATA_DIR / "pending"
 SNAPSHOTS_DIR = DATA_DIR / "snapshots"
 DEVICE_REGISTRY = DATA_DIR / "devices.json"
+SETTINGS_FILE = DATA_DIR / "settings.json"
 
 PENDING_DIR.mkdir(parents=True, exist_ok=True)
 SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+
+DEFAULT_SYNC_FOLDER = str(Path.home() / "KeirstinLinkSync")

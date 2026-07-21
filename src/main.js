@@ -4,6 +4,7 @@ const state = {
   devices: [],
   pending: [],
   files: [],
+  settings: {},
   activeTab: 'sync'
 };
 
@@ -17,6 +18,7 @@ function setStatus(msg) {
 function render() {
   renderDevices();
   renderPending();
+  renderFiles();
 }
 
 function renderDevices() {
@@ -61,18 +63,101 @@ function renderPending() {
   `).join('');
 }
 
-function escapeHtml(str) {
-  return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function renderFiles() {
+  const list = $('#file-list');
+  $('#file-count').textContent = state.files.length;
+  if (state.files.length === 0) {
+    list.innerHTML = '<p class="empty">No synced files yet.</p>';
+    return;
+  }
+  list.innerHTML = state.files.map(f => `
+    <div class="card">
+      <div class="card-info">
+        <p class="card-title">${escapeHtml(f.name || 'Unknown')}</p>
+        <p class="card-meta">${formatBytes(f.size || 0)} • ${escapeHtml(f.path || '')}</p>
+      </div>
+    </div>
+  `).join('');
 }
 
-function randomId(prefix) {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 function showTab(tab) {
   state.activeTab = tab;
   $$('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
   $$('.tab-panel').forEach(p => p.classList.toggle('active', p.id === tab));
+}
+
+// Settings modal
+async function openSettings() {
+  try {
+    const s = await invoke('get_settings');
+    state.settings = s || {};
+    $('#setting-device-name').value = s.device_name || '';
+    $('#setting-mode').value = s.mode || 'master';
+    $('#setting-folder').value = s.sync_folder || '';
+    $('#setting-master-folder').value = s.master_sync_folder || '';
+  } catch (e) {
+    console.error(e);
+    setStatus('Could not load settings: ' + e.message);
+  }
+  $('#settings-modal').classList.add('open');
+}
+
+function closeSettings() {
+  $('#settings-modal').classList.remove('open');
+}
+
+async function saveSettings(e) {
+  e.preventDefault();
+  const payload = {
+    device_name: $('#setting-device-name').value.trim(),
+    mode: $('#setting-mode').value,
+    sync_folder: $('#setting-folder').value.trim(),
+    master_sync_folder: $('#setting-master-folder').value.trim(),
+  };
+  try {
+    await invoke('save_settings', { payload });
+    closeSettings();
+    await refresh();
+    setStatus('Settings saved.');
+  } catch (err) {
+    console.error(err);
+    setStatus('Save settings failed: ' + err.message);
+  }
+}
+
+async function browseFolder() {
+  try {
+    const selected = await invoke('get_folder_index');
+    // Tauri file dialog is not enabled yet; prompt the user for now.
+    const current = $('#setting-folder').value.trim();
+    const path = prompt('Enter sync folder path:', current);
+    if (path) $('#setting-folder').value = path;
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+async function browseMasterFolder() {
+  try {
+    const selected = await invoke('get_folder_index');
+    const current = $('#setting-master-folder').value.trim();
+    const path = prompt('Enter master sync folder path:', current);
+    if (path) $('#setting-master-folder').value = path;
+  } catch (e) {
+    console.error(e);
+  }
 }
 
 // Stub data loaders / actions
@@ -83,8 +168,9 @@ async function refresh() {
     state.devices = data.devices || [];
     state.pending = data.pending || [];
     state.files = data.files || [];
+    state.settings = data.settings || {};
     render();
-    setStatus(`Loaded ${state.devices.length} devices, ${state.pending.length} pending`);
+    setStatus(`Loaded ${state.devices.length} devices, ${state.pending.length} pending, ${state.files.length} files`);
   } catch (e) {
     console.error(e);
     setStatus('Refresh failed: ' + e.message);
@@ -127,8 +213,18 @@ async function removeDevice(id) {
 async function syncDevice(id) {
   setStatus(`Syncing device ${id}...`);
   try {
-    await invoke('sync_device', { payload: { id } });
-    setStatus('Sync queued.');
+    const result = await invoke('sync_device', { payload: { id } });
+    await refresh();
+    const pulled = result.pulled || [];
+    const skipped = result.skipped || [];
+    const count = pulled.length;
+    if (count > 0) {
+      setStatus(`✨ Sync complete: pulled ${count} file(s)`);
+    } else if (skipped.length > 0) {
+      setStatus(`Sync complete: ${skipped.length} file(s) already up to date`);
+    } else {
+      setStatus('Sync complete: no files found');
+    }
   } catch (e) {
     console.error(e);
     setStatus('Sync failed: ' + e.message);
@@ -141,6 +237,11 @@ function init() {
 
   $('#btn-refresh').addEventListener('click', refresh);
   $('#btn-add-device').addEventListener('click', addDevice);
+  $('#btn-settings').addEventListener('click', openSettings);
+  $('#btn-close-settings').addEventListener('click', closeSettings);
+  $('#btn-browse-folder').addEventListener('click', browseFolder);
+  $('#btn-browse-master-folder').addEventListener('click', browseMasterFolder);
+  $('#settings-form').addEventListener('submit', saveSettings);
 
   document.addEventListener('click', e => {
     const btn = e.target.closest('[data-action]');

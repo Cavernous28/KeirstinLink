@@ -138,6 +138,12 @@ class PendingStore:
         _write_json(PendingStore._pending_path(change.id), change.model_dump())
 
     @staticmethod
+    def remove_change(change_id: str) -> None:
+        path = PendingStore._pending_path(change_id)
+        if path.exists():
+            path.unlink()
+
+    @staticmethod
     def set_status(change_id: str, status: ChangeStatus) -> Optional[ProposedChange]:
         change = PendingStore.get_change(change_id)
         if not change:

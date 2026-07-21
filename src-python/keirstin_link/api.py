@@ -2,8 +2,10 @@
 
 import hashlib
 import json
+import os
 import shutil
 import tempfile
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -11,10 +13,12 @@ from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from .config import DATA_DIR, MAX_VERSIONS, PORT
+from .folder_index import index_sync_folder, rebuild_files_index
 from .models import ChangeStatus, DeviceInfo, FileEntry, ProposedChange
+from .settings_store import Settings, SettingsStore
 from .store import DeviceStore, FileStore, PendingStore, SnapshotStore
 
 app = FastAPI(title="KeirstinLink", version="0.1.0")
@@ -39,12 +43,355 @@ def health() -> dict[str, Any]:
 
 @app.get("/state")
 def get_state() -> dict[str, Any]:
-    """Return the current UI state: devices, pending approvals, registered files."""
+    """Return the current UI state: devices, pending approvals, registered files, settings."""
+    settings = SettingsStore.load()
     return {
         "devices": [d.model_dump() for d in DeviceStore.list_devices()],
         "pending": [c.model_dump() for c in PendingStore.list_changes(status=ChangeStatus.PENDING)],
         "files": [f.model_dump() for f in FileStore.list_files()],
+        "settings": settings.model_dump(),
     }
+
+
+@app.get("/settings")
+def get_settings() -> dict[str, Any]:
+    return SettingsStore.load().model_dump()
+
+
+@app.post("/settings")
+def save_settings(
+    device_name: str = Form(""),
+    mode: str = Form("master"),
+    sync_folder: str = Form(""),
+    master_sync_folder: str = Form(""),
+) -> dict[str, Any]:
+    settings = SettingsStore.load()
+    if device_name:
+        settings.device_name = device_name
+    if mode in ("master", "client"):
+        settings.mode = mode
+    if sync_folder:
+        settings.sync_folder = sync_folder
+        Path(sync_folder).mkdir(parents=True, exist_ok=True)
+    if master_sync_folder:
+        settings.master_sync_folder = master_sync_folder
+        Path(master_sync_folder).mkdir(parents=True, exist_ok=True)
+    SettingsStore.save(settings)
+    return settings.model_dump()
+
+
+def _hash_file(path: Path, block_size: int = 65536) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as f:
+        while chunk := f.read(block_size):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+@app.get("/folder-index")
+def folder_index() -> list[dict[str, Any]]:
+    """Return the current contents of the sync folder with hashes."""
+    return [e.model_dump() for e in index_sync_folder()]
+
+
+@app.post("/scan-local")
+def scan_local(
+    device_id: str = Form(...),
+    remote_index_json: str = Form(""),
+) -> dict[str, Any]:
+    """Client: compare local sync folder against a remote master index and return a changeset to propose.
+
+    If `remote_index_json` is provided, use it directly instead of fetching from the device.
+    This makes the endpoint testable without a running remote server.
+    """
+    if remote_index_json:
+        try:
+            remote_index = json.loads(remote_index_json)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON in remote_index_json")
+    else:
+        device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
+        if not device:
+            raise HTTPException(status_code=404, detail="Device not found")
+
+        base_url = f"http://{device.host}:{device.port}"
+        try:
+            import urllib.request
+            req = urllib.request.Request(f"{base_url}/folder-index")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                remote_index = json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Could not fetch folder index from {base_url}: {e}")
+
+    remote_by_path = {e["relative_path"]: e for e in remote_index}
+    local_root = SettingsStore.sync_folder_path()
+    changes = []
+
+    for local_path in local_root.rglob("*"):
+        if not local_path.is_file():
+            continue
+        try:
+            stat = local_path.stat()
+            rel = str(local_path.relative_to(local_root)).replace("\\", "/")
+            local_mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+            local_checksum = _hash_file(local_path)
+            remote = remote_by_path.get(rel)
+            if not remote:
+                changes.append({"relative_path": rel, "action": "create", "checksum": local_checksum, "size": stat.st_size, "modified": local_mtime})
+            elif remote.get("checksum") != local_checksum:
+                changes.append({"relative_path": rel, "action": "update", "checksum": local_checksum, "size": stat.st_size, "modified": local_mtime})
+        except (OSError, ValueError):
+            continue
+
+    return {"device_id": device_id, "changes": changes, "count": len(changes)}
+
+
+@app.post("/folder-index/rebuild")
+def rebuild_index() -> dict[str, Any]:
+    """Rebuild the stored file index from the sync folder."""
+    entries = rebuild_files_index()
+    return {"count": len(entries), "files": [e.model_dump() for e in entries]}
+
+
+@app.get("/files/download")
+def download_file(path: str) -> StreamingResponse:
+    """Download a file from the master sync folder by relative path."""
+    root = SettingsStore.master_folder_path()
+    target = (root / path).resolve()
+    # Security: refuse to serve anything outside the sync folder.
+    if not str(target).startswith(str(root.resolve())):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    def iter_file():
+        with target.open("rb") as f:
+            while chunk := f.read(65536):
+                yield chunk
+
+    return StreamingResponse(iter_file(), media_type="application/octet-stream", headers={"Content-Disposition": f"attachment; filename=\"{target.name}\""})
+
+
+@app.post("/pull")
+def pull_device(device_id: str = Form(...)) -> dict[str, Any]:
+    """Client: pull all missing or changed files from a remote master device."""
+    device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    base_url = f"http://{device.host}:{device.port}"
+    try:
+        import urllib.request
+        req = urllib.request.Request(f"{base_url}/folder-index")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            remote_index = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not fetch folder index from {base_url}: {e}")
+
+    local_root = SettingsStore.sync_folder_path()
+    pulled = []
+    skipped = []
+
+    for remote_entry in remote_index:
+        rel_path = remote_entry["relative_path"]
+        local_path = (local_root / rel_path).resolve()
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+
+        need_download = True
+        if local_path.is_file():
+            local_mtime = datetime.fromtimestamp(local_path.stat().st_mtime, tz=timezone.utc).isoformat()
+            if local_mtime == remote_entry["modified"] and local_path.stat().st_size == remote_entry["size"]:
+                need_download = False
+
+        if need_download:
+            try:
+                safe_rel = rel_path.replace("\\", "/")
+                req = urllib.request.Request(f"{base_url}/files/download?path={urllib.parse.quote(safe_rel)}")
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    local_path.write_bytes(resp.read())
+                # Match mtime to avoid re-downloading next time
+                remote_mtime = datetime.fromisoformat(remote_entry["modified"])
+                os.utime(local_path, (remote_mtime.timestamp(), remote_mtime.timestamp()))
+                pulled.append(rel_path)
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"Failed to pull {rel_path}: {e}")
+        else:
+            skipped.append(rel_path)
+
+    # Rebuild our local index after pull
+    rebuild_files_index()
+    return {"pulled": pulled, "skipped": skipped, "count": len(pulled)}
+
+
+@app.post("/propose-files")
+def propose_files(
+    device_id: str = Form(...),
+    changes_json: str = Form(...),
+) -> dict[str, Any]:
+    """Client: propose a batch of local file changes to a remote master device."""
+    device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    try:
+        changes = json.loads(changes_json)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON in changes_json")
+
+    local_root = SettingsStore.sync_folder_path()
+    base_url = f"http://{device.host}:{device.port}"
+
+    proposed = []
+    boundary = "----KeirstinLinkBoundary"
+
+    for change in changes:
+        rel_path = change.get("relative_path", "")
+        action = change.get("action", "")
+        if not rel_path or action not in ("create", "update"):
+            continue
+
+        local_path = local_root / rel_path
+        if not local_path.is_file():
+            continue
+
+        change_id = str(uuid4())
+        # Build multipart/form-data manually
+        body = []
+        body.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"relative_path\"\r\n\r\n{rel_path}\r\n")
+        body.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"action\"\r\n\r\n{action}\r\n")
+        body.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"source_device\"\r\n\r\n{SettingsStore.load().device_name or device.id}\r\n")
+        body.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"change_id\"\r\n\r\n{change_id}\r\n")
+        body.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{local_path.name}\"\r\nContent-Type: application/octet-stream\r\n\r\n")
+        body.append(local_path.read_bytes().decode("latin-1"))
+        body.append(f"\r\n--{boundary}--\r\n")
+
+        data = "".join(body).encode("latin-1")
+        req = urllib.request.Request(
+            f"{base_url}/receive-proposal",
+            data=data,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+                proposed.append(result)
+        except Exception as e:
+            proposed.append({"relative_path": rel_path, "error": str(e)})
+
+    return {"proposed": proposed, "count": len(proposed)}
+
+
+@app.post("/receive-proposal")
+def receive_proposal(
+    relative_path: str = Form(...),
+    action: str = Form(...),
+    source_device: str = Form(""),
+    change_id: str = Form(""),
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    """Master: receive a single file proposal from a client and queue it for approval."""
+    master_root = SettingsStore.master_folder_path()
+    target_path = (master_root / relative_path).resolve()
+
+    # Security: refuse paths outside master folder
+    if not str(target_path).startswith(str(master_root.resolve())):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not change_id:
+        change_id = str(uuid4())
+
+    pending_dir = DATA_DIR / "pending_files" / change_id
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    upload_dest = pending_dir / target_path.name
+    with upload_dest.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    file_id = f"file-{relative_path.replace('/', '-').replace(' ', '_')}"
+    change = ProposedChange(
+        id=change_id,
+        file_id=file_id,
+        source_device=source_device or None,
+        relative_path=relative_path,
+        action=action,
+        payload={
+            "relative_path": relative_path,
+            "action": action,
+            "uploaded_filename": str(upload_dest),
+            "target_filename": str(target_path),
+            "original_exists": target_path.exists(),
+        },
+    )
+    PendingStore.save_change(change)
+
+    # Mirror to registered file entry for UI consistency
+    entry = FileEntry(
+        id=file_id,
+        name=target_path.name,
+        path=str(target_path),
+        size=upload_dest.stat().st_size,
+        modified=_now(),
+        checksum=_hash_file(upload_dest),
+        tags=[relative_path],
+    )
+    FileStore.upsert_file(entry)
+
+    return change.model_dump()
+
+
+@app.post("/approve")
+def approve_change(change_id: str = Form(...)) -> dict[str, Any]:
+    change = PendingStore.set_status(change_id, ChangeStatus.APPROVED)
+    if not change:
+        raise HTTPException(status_code=404, detail="Change not found")
+
+    payload = change.payload or {}
+    target_filename = payload.get("target_filename")
+    uploaded_filename = payload.get("uploaded_filename")
+    relative_path = payload.get("relative_path") or change.relative_path
+
+    if target_filename and uploaded_filename:
+        target = Path(target_filename)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source = Path(uploaded_filename)
+        if source.exists():
+            # Snapshot existing file before overwrite
+            if target.exists():
+                SnapshotStore.create(change.file_id, source_path=target, note=f"pre-approve {change_id}")
+            shutil.copy2(source, target)
+            # Update file entry
+            entry = FileEntry(
+                id=change.file_id,
+                name=target.name,
+                path=str(target),
+                size=target.stat().st_size,
+                modified=_now(),
+                checksum=_hash_file(target),
+                tags=[relative_path] if relative_path else [],
+            )
+            FileStore.upsert_file(entry)
+
+    return change.model_dump()
+
+
+@app.post("/reject")
+def reject_change(change_id: str = Form(...)) -> dict[str, Any]:
+    change = PendingStore.set_status(change_id, ChangeStatus.REJECTED)
+    if not change:
+        raise HTTPException(status_code=404, detail="Change not found")
+
+    payload = change.payload or {}
+    uploaded_filename = payload.get("uploaded_filename")
+    if uploaded_filename:
+        upload_path = Path(uploaded_filename)
+        if upload_path.exists():
+            upload_path.unlink()
+        pending_dir = DATA_DIR / "pending_files" / change_id
+        if pending_dir.exists():
+            shutil.rmtree(pending_dir)
+
+    PendingStore.remove_change(change_id)
+    return change.model_dump()
 
 
 @app.post("/files/register")
@@ -65,93 +412,6 @@ def register_file(
     )
     FileStore.upsert_file(entry)
     return entry.model_dump()
-
-
-@app.post("/pull")
-def pull_file(uri: str = Form(...), file_id: str = Form(...)) -> dict[str, Any]:
-    """Skeleton pull: expects a local path URI for demo."""
-    source = Path(uri)
-    if not source.exists():
-        raise HTTPException(status_code=404, detail="Source not found")
-
-    dest_dir = DATA_DIR / "files"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / (file_id or source.name)
-    shutil.copy2(source, dest)
-
-    entry = FileEntry(
-        id=file_id or str(uuid4()),
-        name=source.name,
-        path=str(dest),
-        size=dest.stat().st_size,
-        modified=_now(),
-    )
-    FileStore.upsert_file(entry)
-    SnapshotStore.create(entry.id, source_path=dest, note="pulled")
-    return {"file": entry.model_dump(), "snapshot_count": len(SnapshotStore.list_for_file(entry.id))}
-
-
-@app.post("/propose")
-def propose_change(
-    file_id: str = Form(...),
-    payload: str = Form("{}"),
-    source_device: str = Form(""),
-    upload: UploadFile = File(None),
-) -> dict[str, Any]:
-    file_entry = FileStore.get_file(file_id)
-    if not file_entry:
-        raise HTTPException(status_code=404, detail="File not registered")
-
-    change_id = str(uuid4())
-    data = {"raw_payload": json.loads(payload), "uploaded_filename": None}
-    if upload:
-        change_dir = DATA_DIR / "pending_files" / change_id
-        change_dir.mkdir(parents=True, exist_ok=True)
-        dest = change_dir / (upload.filename or "upload")
-        with dest.open("wb") as f:
-            shutil.copyfileobj(upload.file, f)
-        data["uploaded_filename"] = str(dest)
-
-    change = ProposedChange(
-        id=change_id,
-        file_id=file_id,
-        source_device=source_device or None,
-        payload=data,
-    )
-    PendingStore.save_change(change)
-    return change.model_dump()
-
-
-@app.post("/approve")
-def approve_change(change_id: str = Form(...)) -> dict[str, Any]:
-    change = PendingStore.set_status(change_id, ChangeStatus.APPROVED)
-    if not change:
-        raise HTTPException(status_code=404, detail="Change not found")
-
-    file_entry = FileStore.get_file(change.file_id)
-    source = None
-    if file_entry:
-        source = Path(file_entry.path) if Path(file_entry.path).exists() else None
-    if change.payload.get("uploaded_filename"):
-        upload_path = Path(change.payload["uploaded_filename"])
-        if upload_path.exists():
-            source = upload_path
-    if source and source.exists():
-        SnapshotStore.create(change.file_id, source_path=source, note=f"approved {change_id}")
-    return change.model_dump()
-
-
-@app.post("/reject")
-def reject_change(change_id: str = Form(...)) -> dict[str, Any]:
-    change = PendingStore.set_status(change_id, ChangeStatus.REJECTED)
-    if not change:
-        raise HTTPException(status_code=404, detail="Change not found")
-    return change.model_dump()
-
-
-@app.get("/pending")
-def list_pending() -> list[dict[str, Any]]:
-    return [c.model_dump() for c in PendingStore.list_changes(status=ChangeStatus.PENDING)]
 
 
 @app.get("/versions/{file_id}")

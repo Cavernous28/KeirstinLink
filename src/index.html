@@ -15,7 +15,8 @@
         </div>
         <div class="header-actions">
           <button id="btn-refresh" class="btn">Refresh</button>
-          <button id="btn-add-device" class="btn primary">+ Add Device</button>
+          <button id="btn-add-device" class="btn">+ Add Device</button>
+          <button id="btn-settings" class="btn primary">Settings</button>
         </div>
       </header>
 
@@ -36,12 +37,60 @@
           <div id="approval-list" class="card-list">
             <p class="empty">No pending approvals.</p>
           </div>
+
+          <div class="panel-header">
+            <h2>Synced Files</h2>
+            <span id="file-count" class="badge">0</span>
+          </div>
+          <div id="file-list" class="card-list">
+            <p class="empty">No synced files yet.</p>
+          </div>
         </section>
       </main>
 
       <footer class="app-footer">
         <span id="status">Ready</span>
       </footer>
+
+      <!-- Settings modal -->
+      <div id="settings-modal" class="modal">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2>Settings</h2>
+            <button id="btn-close-settings" class="btn icon">&times;</button>
+          </div>
+          <form id="settings-form">
+            <label>
+              <span>Device name</span>
+              <input type="text" id="setting-device-name" placeholder="My PC" />
+            </label>
+
+            <label>
+              <span>Mode</span>
+              <select id="setting-mode">
+                <option value="master">Master (source of truth)</option>
+                <option value="client">Client (pull from master)</option>
+              </select>
+            </label>
+
+            <label>
+              <span>Sync folder</span>
+              <input type="text" id="setting-folder" placeholder="C:\\Users\\cbaxt\\KeirstinLinkSync" />
+              <button type="button" id="btn-browse-folder" class="btn">Browse...</button>
+            </label>
+
+            <label>
+              <span>Master sync folder</span>
+              <input type="text" id="setting-master-folder" placeholder="C:\\Users\\cbaxt\\KeirstinLinkMaster" />
+              <button type="button" id="btn-browse-master-folder" class="btn">Browse...</button>
+            </label>
+
+            <div class="modal-actions">
+              <button type="submit" class="btn primary">Save</button>
+            </div>
+          </form>
+        </div>
+      </div>
     </div>
     <script type="module" src="main.js"></script>
   </body>
