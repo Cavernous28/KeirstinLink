@@ -23,7 +23,6 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr("keirstin_link.store.PENDING_DIR", data_dir / "pending")
     monkeypatch.setattr("keirstin_link.store.SNAPSHOTS_DIR", data_dir / "snapshots")
     monkeypatch.setattr("keirstin_link.store.DEVICE_REGISTRY", data_dir / "devices.json")
-    monkeypatch.setattr("keirstin_link.store.PENDING_DIR", data_dir / "pending")
     monkeypatch.setattr("keirstin_link.settings_store.SETTINGS_FILE", data_dir / "settings.json")
     monkeypatch.setattr("keirstin_link.api.DATA_DIR", data_dir)
     return TestClient(app)
@@ -94,8 +93,9 @@ def test_bidirectional_propose_approve_flow(tmp_path, client):
     # Add a local device
     client.post("/devices", data={"id": "dev-local", "name": "Local", "host": "127.0.0.1", "port": "3710", "capabilities": "master"})
 
-    # Create a file in the client sync folder
+    # Create a file in the client sync folder and a different existing file in the master folder
     (client_dir / "new_file.txt").write_text("client content")
+    (master / "new_file.txt").write_text("original content")
 
     # Build a remote index that says master already has a different checksum
     remote_index = [
@@ -142,7 +142,7 @@ def test_bidirectional_propose_approve_flow(tmp_path, client):
     # Verify a snapshot was created of the original
     r = client.get(f"/versions/{file_id}")
     assert r.status_code == 200
-    assert len(r.json()["versions"]) >= 0  # Snapshot creation verified manually; pytest fixture isolation causes intermittent empty list in CI
+    assert len(r.json()["versions"]) == 1
 
 
 def test_reject_proposal_cleans_up(tmp_path, client):
@@ -183,3 +183,93 @@ def test_devices_empty(client):
     r = client.get("/devices")
     assert r.status_code == 200
     assert r.json() == []
+
+def test_propose_files_http_loopback(tmp_path, monkeypatch):
+    """Integration test for /propose-files using a real subprocess server on a free port."""
+    import json
+    import os
+    import shutil
+    import subprocess
+    import sys
+    import time
+    import urllib.error
+    import urllib.request
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    client_dir = tmp_path / "client"
+    client_dir.mkdir()
+    master_dir = tmp_path / "master"
+    master_dir.mkdir()
+
+    env = os.environ.copy()
+    env["KL_DATA_DIR"] = str(data_dir)
+    env["KL_SYNC_FOLDER"] = str(client_dir)
+    env["KL_MASTER_SYNC_FOLDER"] = str(master_dir)
+
+    port = 3730
+    base = f"http://127.0.0.1:{port}"
+    py_dir = Path(__file__).resolve().parent.parent / "keirstin_link"
+    root_dir = py_dir.parent
+
+    def wait_for_health(timeout=15):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                urllib.request.urlopen(f"{base}/health", timeout=1)
+                return True
+            except Exception:
+                time.sleep(0.25)
+        return False
+
+    def post(path, fields):
+        data = urllib.parse.urlencode(fields).encode()
+        req = urllib.request.Request(f"{base}{path}", data=data, headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, json.loads(resp.read().decode())
+
+    def get(path):
+        req = urllib.request.Request(f"{base}{path}", method="GET")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, json.loads(resp.read().decode())
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "keirstin_link.main", "--host", "127.0.0.1", "--port", str(port), "--no-discovery"],
+        cwd=str(root_dir),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        assert wait_for_health(), "Backend did not start"
+
+        post("/settings", {"device_name": "LoopMaster", "mode": "master", "sync_folder": str(client_dir), "master_sync_folder": str(master_dir)})
+        post("/devices", {"id": "dev-loop", "name": "LoopClient", "host": "127.0.0.1", "port": str(port), "capabilities": "mobile"})
+
+        (client_dir / "loop.txt").write_text("loop content", encoding="utf-8")
+
+        _, scan = post("/scan-local", {"device_id": "dev-loop", "remote_index_json": json.dumps([])})
+        assert scan["count"] == 1
+
+        _, prop = post("/propose-files", {"device_id": "dev-loop", "changes_json": json.dumps(scan["changes"])})
+        assert prop["count"] == 1, prop
+        change_id = prop["proposed"][0]["id"]
+
+        _, state = get("/state")
+        assert len(state["pending"]) == 1
+
+        post("/approve", {"change_id": change_id})
+        master_file = master_dir / "loop.txt"
+        assert master_file.read_text(encoding="utf-8") == "loop content"
+
+        _, final = get("/state")
+        assert len(final["pending"]) == 0
+        assert len(final["files"]) == 1
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+

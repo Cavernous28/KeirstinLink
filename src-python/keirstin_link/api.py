@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -224,7 +225,7 @@ def pull_device(device_id: str = Form(...)) -> dict[str, Any]:
 
 
 @app.post("/propose-files")
-def propose_files(
+async def propose_files(
     device_id: str = Form(...),
     changes_json: str = Form(...),
 ) -> dict[str, Any]:
@@ -242,42 +243,33 @@ def propose_files(
     base_url = f"http://{device.host}:{device.port}"
 
     proposed = []
-    boundary = "----KeirstinLinkBoundary"
+    source_device = SettingsStore.load().device_name or device.id
 
-    for change in changes:
-        rel_path = change.get("relative_path", "")
-        action = change.get("action", "")
-        if not rel_path or action not in ("create", "update"):
-            continue
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for change in changes:
+            rel_path = change.get("relative_path", "")
+            action = change.get("action", "")
+            if not rel_path or action not in ("create", "update"):
+                continue
 
-        local_path = local_root / rel_path
-        if not local_path.is_file():
-            continue
+            local_path = local_root / rel_path
+            if not local_path.is_file():
+                continue
 
-        change_id = str(uuid4())
-        # Build multipart/form-data manually
-        body = []
-        body.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"relative_path\"\r\n\r\n{rel_path}\r\n")
-        body.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"action\"\r\n\r\n{action}\r\n")
-        body.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"source_device\"\r\n\r\n{SettingsStore.load().device_name or device.id}\r\n")
-        body.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"change_id\"\r\n\r\n{change_id}\r\n")
-        body.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{local_path.name}\"\r\nContent-Type: application/octet-stream\r\n\r\n")
-        body.append(local_path.read_bytes().decode("latin-1"))
-        body.append(f"\r\n--{boundary}--\r\n")
-
-        data = "".join(body).encode("latin-1")
-        req = urllib.request.Request(
-            f"{base_url}/receive-proposal",
-            data=data,
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                result = json.loads(resp.read().decode("utf-8"))
-                proposed.append(result)
-        except Exception as e:
-            proposed.append({"relative_path": rel_path, "error": str(e)})
+            change_id = str(uuid4())
+            files = {
+                "relative_path": (None, rel_path),
+                "action": (None, action),
+                "source_device": (None, source_device),
+                "change_id": (None, change_id),
+                "file": (local_path.name, local_path.read_bytes(), "application/octet-stream"),
+            }
+            try:
+                resp = await client.post(f"{base_url}/receive-proposal", files=files)
+                resp.raise_for_status()
+                proposed.append(resp.json())
+            except Exception as e:
+                proposed.append({"relative_path": rel_path, "error": str(e)})
 
     return {"proposed": proposed, "count": len(proposed)}
 

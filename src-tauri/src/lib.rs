@@ -197,6 +197,21 @@ fn sync_device(payload: ByIdPayload) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+fn propose_device(payload: ByIdPayload) -> Result<serde_json::Value, String> {
+    http_post_form("/scan-local", &[("device_id".to_string(), payload.id.clone())])
+        .and_then(|scan| {
+            let changes = scan.get("changes").cloned().unwrap_or(serde_json::Value::Array(vec![]));
+            http_post_form(
+                "/propose-files",
+                &[
+                    ("device_id".to_string(), payload.id),
+                    ("changes_json".to_string(), changes.to_string()),
+                ],
+            )
+        })
+}
+
+#[tauri::command]
 fn get_folder_index() -> Result<serde_json::Value, String> {
     http_get("/folder-index")
 }
@@ -253,6 +268,7 @@ pub fn run() {
             remove_device,
             approve_device,
             sync_device,
+            propose_device,
             get_folder_index,
             connect_remote,
             disconnect_remote,

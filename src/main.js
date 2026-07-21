@@ -35,6 +35,7 @@ function renderDevices() {
         <p class="card-meta">${escapeHtml(d.host || 'unknown')}:${d.port || 0} • ${escapeHtml((d.capabilities || []).join(', ') || 'device')}</p>
       </div>
       <div class="card-actions">
+        <button class="btn" data-action="propose" data-id="${d.id}">Propose</button>
         <button class="btn" data-action="sync" data-id="${d.id}">Sync</button>
         <button class="btn danger" data-action="remove-device" data-id="${d.id}">Remove</button>
       </div>
@@ -138,29 +139,17 @@ async function saveSettings(e) {
 }
 
 async function browseFolder() {
-  try {
-    const selected = await invoke('get_folder_index');
-    // Tauri file dialog is not enabled yet; prompt the user for now.
-    const current = $('#setting-folder').value.trim();
-    const path = prompt('Enter sync folder path:', current);
-    if (path) $('#setting-folder').value = path;
-  } catch (e) {
-    console.error(e);
-  }
+  const current = $('#setting-folder').value.trim();
+  const path = prompt('Enter sync folder path:', current);
+  if (path) $('#setting-folder').value = path;
 }
 
 async function browseMasterFolder() {
-  try {
-    const selected = await invoke('get_folder_index');
-    const current = $('#setting-master-folder').value.trim();
-    const path = prompt('Enter master sync folder path:', current);
-    if (path) $('#setting-master-folder').value = path;
-  } catch (e) {
-    console.error(e);
-  }
+  const current = $('#setting-master-folder').value.trim();
+  const path = prompt('Enter master sync folder path:', current);
+  if (path) $('#setting-master-folder').value = path;
 }
 
-// Stub data loaders / actions
 async function refresh() {
   setStatus('Refreshing...');
   try {
@@ -231,6 +220,23 @@ async function syncDevice(id) {
   }
 }
 
+async function proposeDevice(id) {
+  setStatus(`Scanning + proposing changes for ${id}...`);
+  try {
+    const result = await invoke('propose_device', { payload: { id } });
+    await refresh();
+    const count = result.count || 0;
+    if (count > 0) {
+      setStatus(`✨ Proposed ${count} change(s) for approval`);
+    } else {
+      setStatus('No changes to propose');
+    }
+  } catch (e) {
+    console.error(e);
+    setStatus('Propose failed: ' + e.message);
+  }
+}
+
 // Event wiring
 function init() {
   $$('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
@@ -251,6 +257,7 @@ function init() {
     if (action === 'approve') approve(id, btn.dataset.approve === 'true');
     else if (action === 'remove-device') removeDevice(id);
     else if (action === 'sync') syncDevice(id);
+    else if (action === 'propose') proposeDevice(id);
   });
 
   refresh();
