@@ -1,6 +1,6 @@
 @echo off
 REM KeirstinLink quick start for Windows (cmd)
-REM Starts the master bridge. Run start-slave.bat in another terminal.
+REM Starts the Python backend. Open another terminal for the Tauri UI.
 
 cd /d "%~dp0"
-call start-master.bat
+call start-backend.bat

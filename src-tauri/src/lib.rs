@@ -1,191 +1,220 @@
 use serde::{Deserialize, Serialize};
+use std::process::{Child, Command};
 use std::sync::Mutex;
-use tauri::State;
+use std::time::{Duration, Instant};
+use tauri::Manager;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct Device {
-    id: String,
-    name: String,
-    kind: String,
-    status: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct Approval {
-    id: String,
-    name: String,
-    kind: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct RemoteHermes {
-    id: String,
-    name: String,
-    host: String,
-    port: u16,
-    status: String,
-}
+const PY_BASE_URL: &str = "http://127.0.0.1:3710";
+const PY_START_TIMEOUT_SECONDS: u64 = 15;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
-struct AppState {
-    devices: Vec<Device>,
-    approvals: Vec<Approval>,
-    remotes: Vec<RemoteHermes>,
+struct UiState {
+    devices: Vec<serde_json::Value>,
+    pending: Vec<serde_json::Value>,
+    files: Vec<serde_json::Value>,
 }
-
-struct AppStateMutex(Mutex<AppState>);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct StateSnapshot {
-    devices: Vec<Device>,
-    approvals: Vec<Approval>,
-    remotes: Vec<RemoteHermes>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AddDevicePayload {
+struct DeviceAddPayload {
     name: String,
     kind: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct ByIdPayload {
     id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct ApprovePayload {
     id: String,
     approved: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct ConnectRemotePayload {
     host: String,
     port: u16,
 }
 
-fn random_id(prefix: &str) -> String {
-    format!("{}_{:06x}", prefix, rand::random::<u32>() & 0xffffff)
+struct BackendState {
+    child: Mutex<Option<Child>>,
 }
 
-#[tauri::command]
-fn get_state(state: State<AppStateMutex>) -> Result<StateSnapshot, String> {
-    let guard = state.0.lock().map_err(|e| e.to_string())?;
-    Ok(StateSnapshot {
-        devices: guard.devices.clone(),
-        approvals: guard.approvals.clone(),
-        remotes: guard.remotes.clone(),
-    })
+fn project_root() -> std::path::PathBuf {
+    // In dev, Tauri src-tauri is at <root>/src-tauri; in packaged builds this will differ.
+    let exe = std::env::current_exe().unwrap_or_default();
+    if let Some(dir) = exe.ancestors().nth(2) {
+        return dir.to_path_buf();
+    }
+    std::env::current_dir().unwrap_or_default()
 }
 
-#[tauri::command]
-fn add_device(
-    state: State<AppStateMutex>,
-    payload: AddDevicePayload,
-) -> Result<Device, String> {
-    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-    let device = Device {
-        id: random_id("dev"),
-        name: payload.name,
-        kind: payload.kind,
-        status: "offline".to_string(),
-    };
-    guard.devices.push(device.clone());
-    Ok(device)
+fn py_backend_dir() -> std::path::PathBuf {
+    project_root().join("src-python")
 }
 
-#[tauri::command]
-fn remove_device(state: State<AppStateMutex>, payload: ByIdPayload) -> Result<(), String> {
-    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-    guard.devices.retain(|d| d.id != payload.id);
-    Ok(())
+fn wait_for_backend(deadline: Instant) -> Result<(), String> {
+    while Instant::now() < deadline {
+        if ureq::get(&format!("{}/health", PY_BASE_URL))
+            .timeout(Duration::from_secs(1))
+            .call()
+            .is_ok()
+        {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    Err("Python backend did not start in time".to_string())
 }
 
-#[tauri::command]
-fn approve_device(
-    state: State<AppStateMutex>,
-    payload: ApprovePayload,
-) -> Result<(), String> {
-    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-    if let Some(pos) = guard.approvals.iter().position(|a| a.id == payload.id) {
-        let approval = guard.approvals.remove(pos);
-        if payload.approved {
-            guard.devices.push(Device {
-                id: approval.id,
-                name: approval.name,
-                kind: approval.kind,
-                status: "online".to_string(),
-            });
+fn start_backend() -> Result<Option<Child>, String> {
+    let dir = py_backend_dir();
+    if !dir.exists() {
+        // Packaged builds may bundle the backend differently; fall back to assuming it's already running.
+        return Ok(None);
+    }
+
+    let python_cmd = if cfg!(windows) { "python" } else { "python3" };
+
+    let mut child = Command::new(python_cmd)
+        .arg("-m")
+        .arg("keirstin_link.main")
+        .arg("--host")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg("3710")
+        .arg("--no-discovery")
+        .current_dir(&dir)
+        .spawn()
+        .map_err(|e| format!("failed to spawn Python backend: {}", e))?;
+
+    let deadline = Instant::now() + Duration::from_secs(PY_START_TIMEOUT_SECONDS);
+    match wait_for_backend(deadline) {
+        Ok(()) => Ok(Some(child)),
+        Err(e) => {
+            let _ = child.kill();
+            Err(e)
         }
     }
+}
+
+fn http_get(path: &str) -> Result<serde_json::Value, String> {
+    let url = format!("{}{}", PY_BASE_URL, path);
+    ureq::get(&url)
+        .timeout(Duration::from_secs(10))
+        .call()
+        .map_err(|e| format!("HTTP GET {} failed: {}", url, e))?
+        .into_json()
+        .map_err(|e| format!("failed to parse JSON from {}: {}", url, e))
+}
+
+fn http_post_form(path: &str, form: &[(String, String)]) -> Result<serde_json::Value, String> {
+    let url = format!("{}{}", PY_BASE_URL, path);
+    let form_slice: Vec<(&str, &str)> = form.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    ureq::post(&url)
+        .timeout(Duration::from_secs(10))
+        .send_form(&form_slice)
+        .map_err(|e| format!("HTTP POST {} failed: {}", url, e))?
+        .into_json()
+        .map_err(|e| format!("failed to parse JSON from {}: {}", url, e))
+}
+
+fn http_delete(path: &str) -> Result<serde_json::Value, String> {
+    let url = format!("{}{}", PY_BASE_URL, path);
+    ureq::delete(&url)
+        .timeout(Duration::from_secs(10))
+        .call()
+        .map_err(|e| format!("HTTP DELETE {} failed: {}", url, e))?
+        .into_json()
+        .map_err(|e| format!("failed to parse JSON from {}: {}", url, e))
+}
+
+#[tauri::command]
+fn get_state() -> Result<UiState, String> {
+    let data = http_get("/state")?;
+    let devices = data.get("devices").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let pending = data.get("pending").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let files = data.get("files").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    Ok(UiState { devices, pending, files })
+}
+
+#[tauri::command]
+fn add_device(payload: DeviceAddPayload) -> Result<serde_json::Value, String> {
+    let id = format!("dev-{}", rand::random::<u32>());
+    http_post_form(
+        "/devices",
+        &[
+            ("id".to_string(), id),
+            ("name".to_string(), payload.name),
+            ("host".to_string(), "127.0.0.1".to_string()),
+            ("port".to_string(), "3710".to_string()),
+            ("capabilities".to_string(), payload.kind),
+        ],
+    )
+}
+
+#[tauri::command]
+fn remove_device(payload: ByIdPayload) -> Result<serde_json::Value, String> {
+    http_delete(&format!("/devices/{}", urlencoding::encode(&payload.id)))
+}
+
+#[tauri::command]
+fn approve_device(payload: ApprovePayload) -> Result<serde_json::Value, String> {
+    let path = if payload.approved { "/approve" } else { "/reject" };
+    http_post_form(path, &[("change_id".to_string(), payload.id)])
+}
+
+#[tauri::command]
+fn sync_device(payload: ByIdPayload) -> Result<(), String> {
+    let _ = payload;
+    // TODO: trigger real pull/propose
     Ok(())
 }
 
 #[tauri::command]
-fn sync_device(_state: State<AppStateMutex>, _payload: ByIdPayload) -> Result<(), String> {
-    // TODO: wire to real sync engine
+fn connect_remote(payload: ConnectRemotePayload) -> Result<serde_json::Value, String> {
+    let _ = payload;
+    // TODO: real remote Hermes connection
+    Ok(serde_json::json!({"status": "stub"}))
+}
+
+#[tauri::command]
+fn disconnect_remote(payload: ByIdPayload) -> Result<(), String> {
+    let _ = payload;
     Ok(())
 }
 
 #[tauri::command]
-fn connect_remote(
-    state: State<AppStateMutex>,
-    payload: ConnectRemotePayload,
-) -> Result<RemoteHermes, String> {
-    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-    let id = random_id("remote");
-    let remote = RemoteHermes {
-        id: id.clone(),
-        name: format!("{}:{}", payload.host, payload.port),
-        host: payload.host,
-        port: payload.port,
-        status: "offline".to_string(),
-    };
-    guard.remotes.push(remote.clone());
-    Ok(remote)
-}
-
-#[tauri::command]
-fn disconnect_remote(state: State<AppStateMutex>, payload: ByIdPayload) -> Result<(), String> {
-    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-    guard.remotes.retain(|r| r.id != payload.id);
+fn sync_remote(payload: ByIdPayload) -> Result<(), String> {
+    let _ = payload;
     Ok(())
-}
-
-#[tauri::command]
-fn sync_remote(_state: State<AppStateMutex>, _payload: ByIdPayload) -> Result<(), String> {
-    // TODO: wire to real remote sync engine
-    Ok(())
-}
-
-// Seed a few demo approvals so the UI isn't empty on first load.
-fn seed_state(_app: &mut tauri::App) {
-    // State is already pre-seeded in manage(); future dynamic seeding can go here.
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(AppStateMutex(Mutex::new(AppState {
-            devices: vec![],
-            approvals: vec![
-                Approval {
-                    id: random_id("req"),
-                    name: "Chris’s iPhone".to_string(),
-                    kind: "mobile".to_string(),
-                },
-                Approval {
-                    id: random_id("req"),
-                    name: "Work Laptop".to_string(),
-                    kind: "desktop".to_string(),
-                },
-            ],
-            remotes: vec![],
-        })))
+        .manage(BackendState { child: Mutex::new(None) })
         .setup(|app| {
-            seed_state(app);
+            let handle = app.app_handle().clone();
+            std::thread::spawn(move || {
+                match start_backend() {
+                    Ok(Some(child)) => {
+                        if let Some(state) = handle.try_state::<BackendState>() {
+                            let _ = state.child.lock().map_err(|e| e.to_string()).map(|mut guard| {
+                                *guard = Some(child);
+                            });
+                        }
+                    }
+                    Ok(None) => {
+                        eprintln!("[keirstinlink] no bundled backend found; assuming it is already running");
+                    }
+                    Err(e) => {
+                        eprintln!("[keirstinlink] backend start failed: {}", e);
+                    }
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -2,45 +2,34 @@
 
 ## Purpose
 
-KeirstinLink connects multiple Hermes Agent instances so that a single **master** can coordinate work across one or more **slave** instances. It is intentionally lightweight: a thin bridge, clear launcher scripts, and explicit safety rules. The design favors clarity and user control over automation.
+KeirstinLink is a **LAN-first file sync and transfer tool** for Android, Windows, and Linux. A single **master** device acts as the source of truth; **client** devices pull from it automatically and may propose changes that the master must approve before they are applied.
+
+This document also preserves the original remote-Hermes-bridge idea as a later phase, but the first milestone is safe, simple file sync across home devices.
 
 ## Core concepts
 
 ### Master
 
-The master is the authoritative Hermes instance. It:
+The master is the authoritative device (usually the main home PC). It:
 
-- Accepts user requests and decides what can be delegated.
-- Breaks work into discrete, bounded tasks.
-- Sends tasks to slaves and waits for their summaries.
-- Maintains the canonical project state and memory.
-- Never auto-approves destructive actions on behalf of the user.
+- Keeps the canonical copy of synced folders.
+- Serves a file index and accepts pull/propose requests over HTTP.
+- Requires explicit approval before applying any change proposed by a client.
+- Keeps version snapshots of files so changes can be rolled back.
+- Never auto-approves destructive actions.
 
-### Slave
+### Client
 
-A slave is a separate Hermes instance that:
+A client is any other device (phone, laptop, handheld, Linux box). It:
 
-- Receives a single focused task from the master.
-- Runs with a restricted toolset and no access to master memory.
-- Returns a structured summary or artifact path.
-- Does not re-delegate unless explicitly configured as a sub-orchestrator.
-- Lives for the duration of its task and then exits (default).
+- Discovers the master on the LAN via UDP broadcast and/or mDNS.
+- Pulls missing or changed files from master automatically on startup/schedule.
+- Can propose a changeset to master; the changes land in a `pending-review/` queue.
+- Never pushes changes to master directly.
 
-### Remote Hermes bridge mode
+### Remote Hermes bridge mode (Phase 2)
 
-There are two ways a slave can live on another machine:
-
-1. **Native Hermes delegation** (`delegate_task`, `hermes chat -q`, tmux, etc.)
-   - Uses Hermes' existing subagent / spawning mechanisms.
-   - Best for quick, bounded tasks where the slave returns before the master continues.
-   - Requires only Hermes + SSH or a shared network path.
-
-2. **KeirstinLink bridge** (this project)
-   - A small Python/Node bridge server runs on the master or a well-known host.
-   - Slaves connect via HTTP POST or WebSocket, receive a task payload, run it, and POST back a result.
-   - Best for long-lived remote workers, machines without direct CLI access, or mixed-OS fleets.
-
-Both modes can coexist. The launcher scripts use native delegation by default; the bridge is opt-in.
+After the sync layer is solid, the same secure device-to-device tunnel can carry Hermes API calls so a travel device can proxy agent commands back to the home PC. See `DESIGN.md` history or the `cross-device-file-sync` skill for the original bridge design.
 
 ## Message flow
 

@@ -25,10 +25,12 @@ def test_health(client):
     assert r.json()["status"] == "ok"
 
 
-def test_files_empty(client):
-    r = client.get("/files")
+def test_state_empty(client):
+    r = client.get("/state")
     assert r.status_code == 200
-    assert r.json() == []
+    data = r.json()
+    assert data["devices"] == []
+    assert data["pending"] == []
 
 
 def test_register_and_pull(tmp_path, client):

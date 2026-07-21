@@ -1,95 +1,85 @@
 # KeirstinLink
 
-A lightweight bridge and launcher system for running coordinated, multi-instance Hermes Agent sessions. KeirstinLink lets a **master** Hermes instance delegate work to one or more **slave** Hermes instances — locally or on remote machines — while keeping a clear safety boundary around approvals, secrets, and state.
+A lightweight, LAN-first file sync and transfer tool for Android, Windows, and Linux.
 
 ## What it is
 
-- **Master/Slave coordinator**: One primary Hermes session acts as the orchestrator; slave instances receive focused tasks and return summaries.
-- **Remote Hermes bridge mode**: Slaves can run on other hosts and connect back to the master via a simple HTTP/WebSocket bridge or the Hermes native delegation tools.
-- **Launcher scaffolding**: Cross-platform start scripts, dependency manifests, and a design doc so the project is immediately readable and iterate-able.
-- **Safety-first defaults**: No auto-approvals, no persistent background agents unless explicitly requested, and secrets stay in user-managed `.env` files.
+- **LAN-first sync**: Devices discover each other on the local network and transfer files directly.
+- **Master/slave safety model**: One master device is the source of truth. Clients pull automatically but can only *propose* changes; the master must approve them.
+- **Version snapshots**: Master keeps the last N versions of files for rollback.
+- **Cross-platform UI**: Tauri v2 shell with a Python FastAPI backend.
 
 ## Repository layout
 
 ```
 KeirstinLink/
 ├── README.md                 # This file
-├── DESIGN.md                 # Architecture, master/slave model, remote bridge, safety rules
-├── requirements.txt          # Python dependencies
-├── package.json              # Node-side bridge dependencies (optional WebSocket/API bridge)
-├── pyproject.toml            # Python project metadata
-├── start.bat                 # Windows cmd launcher
-├── start.sh                  # POSIX/bash launcher
-├── start-master.bat          # Windows cmd: launch the master instance
-├── start-slave.bat           # Windows cmd: launch a slave instance
-├── .env.example              # Example environment variables (copy to .env and fill in)
-└── src/
-    ├── __init__.py
-    ├── bridge.py             # Core bridge server/client stubs
-    ├── master.py             # Master orchestrator stub
-    ├── slave.py              # Slave worker stub
-    └── config.py             # Shared configuration helpers
+├── DESIGN.md                 # Architecture and safety rules
+├── .env.example              # Environment variables
+├── start.bat                 # Windows quick start (launches backend)
+├── start-backend.bat         # Windows backend launcher
+├── start.sh                  # POSIX backend launcher
+├── src/                      # Tauri frontend (HTML/JS/CSS)
+├── src-tauri/                # Tauri Rust shell
+└── src-python/               # FastAPI backend
+    └── keirstin_link/
+        ├── main.py           # Uvicorn entry point
+        ├── api.py            # REST endpoints
+        ├── config.py         # Settings
+        ├── discovery.py      # UDP + mDNS discovery
+        ├── models.py         # Pydantic models
+        └── store.py          # JSON file stores
 ```
-
-> **Note:** This is a skeleton. The bridge and master/slave code are intentionally thin — the goal is to establish structure, conventions, and a shared design document before filling in behavior.
 
 ## Quick start
 
-### 1. Configure the environment
-
-Copy `.env.example` to `.env` and fill in the values. KeirstinLink never reads credentials from anywhere else.
+### 1. Configure
 
 ```bash
 cp .env.example .env
-# Edit .env with your API keys and host names.
+# Edit .env if you want to change port or data directory.
 ```
 
-### 2. Install dependencies
-
-**Python:**
+### 2. Install Python dependencies
 
 ```bash
+cd src-python
 pip install -r requirements.txt
 ```
 
-**Node bridge (only if using the optional WebSocket bridge):**
+### 3. Start the backend
 
-```bash
-npm install
-```
-
-### 3. Launch
-
-**Windows (cmd):**
-
+**Windows:**
 ```bat
-start-master.bat
-start-slave.bat
+cd KeirstinLink
+start.bat
 ```
 
 **POSIX / git-bash:**
+```bash
+./start.sh
+```
+
+### 4. Start the Tauri UI (development)
 
 ```bash
-./start.sh master
-./start.sh slave
+npm install
+cd src-tauri
+cargo tauri dev
 ```
+
+## Current status
+
+The backend runs and exposes a working REST API. The frontend shell renders the device list and pending approvals. The Rust shell now auto-starts the Python backend in development.
+
+**Still to implement:**
+- Real folder/file sync engine (delta by hash/mtime, pull from master, propose changes).
+- Android client.
+- Remote Hermes bridge mode (deferred until sync is solid).
 
 ## Design and safety
 
-See [DESIGN.md](DESIGN.md) for:
-
-- Master/slave responsibilities and message flow
-- Remote Hermes bridge mode (HTTP/WebSocket bridge vs. native `delegate_task`)
-- Safety rules, approval boundaries, and how secrets are handled
-- How this relates to Keirstin's existing continuity and collaboration conventions
-
-## Contributing / iterating
-
-This repo is meant to be edited in place. Before adding behavior:
-
-1. Update `DESIGN.md` if the architecture changes.
-2. Keep launcher scripts simple and comment any new environment variables.
-3. Do not commit `.env` files — the repository ignores them by default.
+See [DESIGN.md](DESIGN.md).
 
 ## License
 

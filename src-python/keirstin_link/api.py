@@ -10,13 +10,22 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from .config import DATA_DIR, MAX_VERSIONS, PORT
-from .models import ChangeStatus, FileEntry, ProposedChange
+from .models import ChangeStatus, DeviceInfo, FileEntry, ProposedChange
 from .store import DeviceStore, FileStore, PendingStore, SnapshotStore
 
 app = FastAPI(title="KeirstinLink", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def _now() -> datetime:
@@ -28,9 +37,14 @@ def health() -> dict[str, Any]:
     return {"status": "ok", "service": "KeirstinLink", "port": PORT}
 
 
-@app.get("/files")
-def list_files() -> list[dict[str, Any]]:
-    return [f.model_dump() for f in FileStore.list_files()]
+@app.get("/state")
+def get_state() -> dict[str, Any]:
+    """Return the current UI state: devices, pending approvals, registered files."""
+    return {
+        "devices": [d.model_dump() for d in DeviceStore.list_devices()],
+        "pending": [c.model_dump() for c in PendingStore.list_changes(status=ChangeStatus.PENDING)],
+        "files": [f.model_dump() for f in FileStore.list_files()],
+    }
 
 
 @app.post("/files/register")
@@ -157,6 +171,25 @@ def download_version(file_id: str, snapshot_id: str) -> FileResponse:
 @app.get("/devices")
 def list_devices() -> list[dict[str, Any]]:
     return [d.model_dump() for d in DeviceStore.list_devices()]
+
+
+@app.post("/devices")
+def register_device(
+    id: str = Form(...),
+    name: str = Form(...),
+    host: str = Form("127.0.0.1"),
+    port: int = Form(3710),
+    capabilities: str = Form(""),
+) -> dict[str, Any]:
+    device = DeviceInfo(
+        id=id,
+        name=name,
+        host=host,
+        port=port,
+        capabilities=[c.strip() for c in capabilities.split(",") if c.strip()],
+    )
+    DeviceStore.upsert_device(device)
+    return device.model_dump()
 
 
 @app.delete("/devices/{device_id}")
