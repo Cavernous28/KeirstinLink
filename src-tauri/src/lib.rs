@@ -5,6 +5,9 @@ use std::time::{Duration, Instant};
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 const PY_BASE_URL: &str = "http://127.0.0.1:3710";
 const PY_START_TIMEOUT_SECONDS: u64 = 15;
 
@@ -97,7 +100,17 @@ fn start_backend() -> Result<Option<Child>, String> {
 
     let python_cmd = if cfg!(windows) { "python" } else { "python3" };
 
-    let mut child = Command::new(python_cmd)
+    #[cfg(windows)]
+    let mut cmd = {
+        use std::os::windows::process::CommandExt;
+        let mut c = Command::new(python_cmd);
+        c.creation_flags(CREATE_NO_WINDOW);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut cmd = Command::new(python_cmd);
+
+    let mut child = cmd
         .arg("-m")
         .arg("keirstin_link.main")
         .arg("--host")
