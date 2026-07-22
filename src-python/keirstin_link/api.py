@@ -8,7 +8,7 @@ import tempfile
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 from uuid import uuid4
 
 import httpx
@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from .config import DATA_DIR, MAX_VERSIONS, PORT
 from .folder_index import index_sync_folder, rebuild_files_index
-from .models import ChangeStatus, DeviceInfo, FileEntry, ProposedChange
+from .models import ChangeStatus, DeviceInfo, FileEntry, ProposedChange, SyncRoot
 from .settings_store import Settings, SettingsStore
 from .store import DeviceStore, FileStore, PendingStore, SnapshotStore
 
@@ -125,29 +125,35 @@ def scan_local(
             raise HTTPException(status_code=502, detail=f"Could not fetch folder index from {base_url}: {e}")
 
     remote_by_path = {e["relative_path"]: e for e in remote_index}
-    local_root = SettingsStore.sync_folder_path()
+    default_root = SettingsStore.sync_folder_path()
+    roots = _iter_sync_roots(device, default_root)
     allowed = _parse_shared_folders(device.shared_folders)
     changes = []
 
-    for local_path in local_root.rglob("*"):
-        if not local_path.is_file():
+    for local_root, remote_prefix in roots:
+        if not local_root.exists():
             continue
-        try:
-            stat = local_path.stat()
-            rel = str(local_path.relative_to(local_root)).replace("\\", "/")
-            if not _is_under_shared_folders(rel, allowed):
+        for local_path in local_root.rglob("*"):
+            if not local_path.is_file():
                 continue
-            local_mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
-            local_checksum = _hash_file(local_path)
-            remote = remote_by_path.get(rel)
-            if not remote:
-                changes.append({"relative_path": rel, "action": "create", "checksum": local_checksum, "size": stat.st_size, "modified": local_mtime})
-            elif remote.get("checksum") != local_checksum:
-                changes.append({"relative_path": rel, "action": "update", "checksum": local_checksum, "size": stat.st_size, "modified": local_mtime})
-        except (OSError, ValueError):
-            continue
+            try:
+                stat = local_path.stat()
+                rel_to_root = _normalize_rel_path(str(local_path.relative_to(local_root)))
+                rel = _local_to_remote(rel_to_root, remote_prefix)
+                # Legacy fallback filtering: if no explicit sync roots, honor shared_folders
+                if not device.sync_roots and not _is_under_shared_folders(rel, allowed):
+                    continue
+                local_mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+                local_checksum = _hash_file(local_path)
+                remote = remote_by_path.get(rel)
+                if not remote:
+                    changes.append({"relative_path": rel, "action": "create", "checksum": local_checksum, "size": stat.st_size, "modified": local_mtime})
+                elif remote.get("checksum") != local_checksum:
+                    changes.append({"relative_path": rel, "action": "update", "checksum": local_checksum, "size": stat.st_size, "modified": local_mtime})
+            except (OSError, ValueError):
+                continue
 
-    return {"device_id": device_id, "changes": changes, "count": len(changes)}
+    return {"device_id": device_id, "changes": changes, "count": len(changes), "sync_roots": [r.model_dump() for r in device.sync_roots]}
 
 
 def _parse_shared_folders(raw: list[str]) -> list[str]:
@@ -171,6 +177,72 @@ def _is_under_shared_folders(rel_path: str, folders: list[str]) -> bool:
         if rel_path == folder or rel_path.startswith(folder + "/"):
             return True
     return False
+
+
+def _parse_sync_roots(raw: list[dict[str, str]]) -> list[SyncRoot]:
+    """Parse sync roots from JSON/dict form."""
+    roots = []
+    for item in raw:
+        if isinstance(item, SyncRoot):
+            roots.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        local = item.get("local_path", "").strip()
+        remote = item.get("remote_prefix", "").strip().replace("\\", "/").strip("/")
+        if local:
+            roots.append(SyncRoot(local_path=local, remote_prefix=remote))
+    return roots
+
+
+def _normalize_rel_path(rel: str) -> str:
+    """Normalize a relative path to forward slashes, no leading/trailing slashes."""
+    return rel.replace("\\", "/").strip("/")
+
+
+def _iter_sync_roots(device: DeviceInfo, default_root: Path) -> list[tuple[Path, str]]:
+    """Return list of (local_root_path, remote_prefix) to scan for this device.
+
+    If the device has sync_roots, use those. Otherwise fall back to the default sync folder
+    with the remote_prefix derived from shared_folders logic (empty prefix = whole folder).
+    """
+    if device.sync_roots:
+        return [(Path(r.local_path), _normalize_rel_path(r.remote_prefix)) for r in device.sync_roots]
+    # Legacy fallback: one root at the global sync folder, no remote prefix; filter by shared_folders later
+    return [(default_root, "")]
+
+
+def _local_to_remote(rel_to_root: str, remote_prefix: str) -> str:
+    """Combine a path relative to a local root with the remote prefix."""
+    rel_to_root = _normalize_rel_path(rel_to_root)
+    if remote_prefix:
+        return f"{remote_prefix}/{rel_to_root}" if rel_to_root else remote_prefix
+    return rel_to_root
+
+
+def _find_sync_root_for_remote(remote_path: str, roots: list[tuple[Path, str]]) -> tuple[Optional[Path], str]:
+    """Find the local root whose remote_prefix matches the start of remote_path.
+
+    Returns (local_root, remainder_relative_to_local_root). If no match, returns (None, remote_path).
+    """
+    remote_path = _normalize_rel_path(remote_path)
+    # Prefer longest prefix match
+    best: tuple[Optional[Path], str] = (None, remote_path)
+    best_len = -1
+    for local_root, prefix in roots:
+        if not prefix:
+            if best_len < 0:
+                best = (local_root, remote_path)
+                best_len = 0
+            continue
+        prefix_norm = _normalize_rel_path(prefix)
+        if remote_path == prefix_norm:
+            return (local_root, "")
+        if remote_path.startswith(prefix_norm + "/"):
+            if len(prefix_norm) > best_len:
+                best = (local_root, remote_path[len(prefix_norm) + 1:])
+                best_len = len(prefix_norm)
+    return best
 
 
 @app.post("/folder-index/rebuild")
@@ -200,32 +272,43 @@ def download_file(path: str) -> StreamingResponse:
 
 
 @app.post("/pull")
-def pull_device(device_id: str = Form(...)) -> dict[str, Any]:
-    """Client: pull all missing or changed files from a remote master device."""
+def pull_device(device_id: str = Form(...), remote_index_json: str = Form("")) -> dict[str, Any]:
+    """Client: pull all missing or changed files from a remote master device.
+
+    If `remote_index_json` is provided, use it directly instead of fetching from the device.
+    """
     device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
-    base_url = f"http://{device.host}:{device.port}"
-    try:
-        import urllib.request
-        req = urllib.request.Request(f"{base_url}/folder-index")
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            remote_index = json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not fetch folder index from {base_url}: {e}")
+    if remote_index_json:
+        try:
+            remote_index = json.loads(remote_index_json)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON in remote_index_json")
+    else:
+        base_url = f"http://{device.host}:{device.port}"
+        try:
+            import urllib.request
+            req = urllib.request.Request(f"{base_url}/folder-index")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                remote_index = json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Could not fetch folder index from {base_url}: {e}")
 
-    local_root = SettingsStore.sync_folder_path()
-    allowed = _parse_shared_folders(device.shared_folders)
+    local_default = SettingsStore.sync_folder_path()
+    roots = _iter_sync_roots(device, local_default)
     pulled = []
     skipped = []
 
     for remote_entry in remote_index:
-        rel_path = remote_entry["relative_path"]
-        if not _is_under_shared_folders(rel_path, allowed):
+        remote_path = remote_entry["relative_path"]
+        local_root, rel_to_root = _find_sync_root_for_remote(remote_path, roots)
+        if local_root is None:
+            # No configured sync root covers this remote path; skip
             continue
 
-        local_path = (local_root / rel_path).resolve()
+        local_path = (local_root / rel_to_root).resolve()
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
         need_download = True
@@ -236,18 +319,18 @@ def pull_device(device_id: str = Form(...)) -> dict[str, Any]:
 
         if need_download:
             try:
-                safe_rel = rel_path.replace("\\", "/")
+                safe_rel = remote_path.replace("\\", "/")
                 req = urllib.request.Request(f"{base_url}/files/download?path={urllib.parse.quote(safe_rel)}")
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     local_path.write_bytes(resp.read())
                 # Match mtime to avoid re-downloading next time
                 remote_mtime = datetime.fromisoformat(remote_entry["modified"])
                 os.utime(local_path, (remote_mtime.timestamp(), remote_mtime.timestamp()))
-                pulled.append(rel_path)
+                pulled.append(remote_path)
             except Exception as e:
-                raise HTTPException(status_code=502, detail=f"Failed to pull {rel_path}: {e}")
+                raise HTTPException(status_code=502, detail=f"Failed to pull {remote_path}: {e}")
         else:
-            skipped.append(rel_path)
+            skipped.append(remote_path)
 
     # Rebuild our local index after pull
     rebuild_files_index()
@@ -269,7 +352,8 @@ async def propose_files(
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON in changes_json")
 
-    local_root = SettingsStore.sync_folder_path()
+    local_default = SettingsStore.sync_folder_path()
+    roots = _iter_sync_roots(device, local_default)
     base_url = f"http://{device.host}:{device.port}"
 
     proposed = []
@@ -282,8 +366,14 @@ async def propose_files(
             if not rel_path or action not in ("create", "update"):
                 continue
 
-            local_path = local_root / rel_path
+            local_root, rel_to_root = _find_sync_root_for_remote(rel_path, roots)
+            if local_root is None:
+                proposed.append({"relative_path": rel_path, "error": "No sync root covers this path"})
+                continue
+
+            local_path = (local_root / rel_to_root).resolve()
             if not local_path.is_file():
+                proposed.append({"relative_path": rel_path, "error": "Local file not found"})
                 continue
 
             change_id = str(uuid4())
@@ -463,7 +553,14 @@ def register_device(
     port: int = Form(3710),
     capabilities: str = Form(""),
     shared_folders: str = Form(""),
+    sync_roots_json: str = Form(""),
 ) -> dict[str, Any]:
+    roots = []
+    if sync_roots_json:
+        try:
+            roots = _parse_sync_roots(json.loads(sync_roots_json))
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON in sync_roots_json")
     device = DeviceInfo(
         id=id,
         name=name,
@@ -471,6 +568,7 @@ def register_device(
         port=port,
         capabilities=[c.strip() for c in capabilities.split(",") if c.strip()],
         shared_folders=[f.strip().replace("\\", "/").strip("/") for f in shared_folders.split(",") if f.strip()],
+        sync_roots=roots,
     )
     DeviceStore.upsert_device(device)
     return device.model_dump()
@@ -484,6 +582,7 @@ def update_device(
     port: int = Form(0),
     capabilities: str = Form(""),
     shared_folders: str = Form(""),
+    sync_roots_json: str = Form(""),
 ) -> dict[str, Any]:
     device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
     if not device:
@@ -498,6 +597,11 @@ def update_device(
         device.capabilities = [c.strip() for c in capabilities.split(",") if c.strip()]
     if shared_folders:
         device.shared_folders = [f.strip().replace("\\", "/").strip("/") for f in shared_folders.split(",") if f.strip()]
+    if sync_roots_json:
+        try:
+            device.sync_roots = _parse_sync_roots(json.loads(sync_roots_json))
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON in sync_roots_json")
     DeviceStore.upsert_device(device)
     return device.model_dump()
 

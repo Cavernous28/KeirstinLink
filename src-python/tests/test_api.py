@@ -314,3 +314,144 @@ def test_update_device_shared_folders(tmp_path, client):
     assert data["name"] == "New"
     assert data["shared_folders"] == ["obsidian", "shared"]
 
+
+def test_sync_roots_map_local_folders_to_remote_prefixes(tmp_path, client):
+    """A device with sync_roots should map each local folder to a remote prefix on the master."""
+    master = tmp_path / "master"
+    master.mkdir()
+    obsidian_local = tmp_path / "phone_obsidian"
+    obsidian_local.mkdir()
+    photos_local = tmp_path / "phone_photos"
+    photos_local.mkdir()
+
+    client.post("/settings", data={"device_name": "Master", "mode": "master", "sync_folder": str(tmp_path / "unused"), "master_sync_folder": str(master)})
+    roots_json = json.dumps([
+        {"local_path": str(obsidian_local), "remote_prefix": "obsidian"},
+        {"local_path": str(photos_local), "remote_prefix": "shared/photos"},
+    ])
+    client.post("/devices", data={
+        "id": "dev-phone",
+        "name": "Phone",
+        "host": "127.0.0.1",
+        "port": "3710",
+        "capabilities": "mobile",
+        "sync_roots_json": roots_json,
+    })
+
+    (obsidian_local / "note.md").write_text("note")
+    (photos_local / "pic.jpg").write_text("pic")
+
+    r = client.post("/scan-local", data={"device_id": "dev-phone", "remote_index_json": json.dumps([])})
+    assert r.status_code == 200
+    scan = r.json()
+    paths = {c["relative_path"] for c in scan["changes"]}
+    assert "obsidian/note.md" in paths
+    assert "shared/photos/pic.jpg" in paths
+    assert len(paths) == 2
+
+    # Propose and approve should write to the master folder under the correct prefixes.
+    # Use /receive-proposal directly because /propose-files needs a real HTTP peer.
+    for change in scan["changes"]:
+        rel = change["relative_path"]
+        src_local_root, rel_to_root = _find_local_root_for_change(rel, [(obsidian_local, "obsidian"), (photos_local, "shared/photos")])
+        src_path = src_local_root / rel_to_root
+        with src_path.open("rb") as f:
+            r = client.post(
+                "/receive-proposal",
+                data={"relative_path": rel, "action": change["action"], "source_device": "dev-phone"},
+                files={"file": (src_path.name, f, "application/octet-stream")},
+            )
+        assert r.status_code == 200
+        r = client.post("/approve", data={"change_id": r.json()["id"]})
+        assert r.status_code == 200
+
+    assert (master / "obsidian" / "note.md").read_text() == "note"
+    assert (master / "shared" / "photos" / "pic.jpg").read_text() == "pic"
+
+
+def _find_local_root_for_change(rel, roots):
+    for local_root, prefix in roots:
+        prefix_norm = prefix.replace("\\", "/").strip("/")
+        rel_norm = rel.replace("\\", "/").strip("/")
+        if rel_norm.startswith(prefix_norm + "/"):
+            return local_root, rel_norm[len(prefix_norm) + 1:]
+        if rel_norm == prefix_norm:
+            return local_root, ""
+    raise ValueError(f"no root for {rel}")
+
+
+def test_pull_uses_sync_roots_to_place_files(tmp_path, monkeypatch):
+    """Pull should write downloaded files into the correct local sync root based on remote prefix."""
+    import json
+    import os
+    import subprocess
+    import sys
+    import time
+    import urllib.error
+    import urllib.request
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    master_dir = tmp_path / "master"
+    master_dir.mkdir()
+    obsidian_local = tmp_path / "phone_obsidian"
+    obsidian_local.mkdir()
+
+    env = os.environ.copy()
+    env["KL_DATA_DIR"] = str(data_dir)
+    env["KL_SYNC_FOLDER"] = str(tmp_path / "unused")
+    env["KL_MASTER_SYNC_FOLDER"] = str(master_dir)
+
+    port = 3731
+    base = f"http://127.0.0.1:{port}"
+    root_dir = Path(__file__).resolve().parent.parent
+
+    def wait_for_health(timeout=15):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                urllib.request.urlopen(f"{base}/health", timeout=1)
+                return True
+            except Exception:
+                time.sleep(0.25)
+        return False
+
+    def post(path, fields):
+        data = urllib.parse.urlencode(fields).encode()
+        req = urllib.request.Request(f"{base}{path}", data=data, headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, json.loads(resp.read().decode())
+
+    def get(path):
+        req = urllib.request.Request(f"{base}{path}", method="GET")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, json.loads(resp.read().decode())
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "keirstin_link.main", "--host", "127.0.0.1", "--port", str(port), "--no-discovery"],
+        cwd=str(root_dir),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        assert wait_for_health(), "Backend did not start"
+
+        roots_json = json.dumps([{"local_path": str(obsidian_local), "remote_prefix": "obsidian"}])
+        post("/settings", {"device_name": "Master", "mode": "master", "sync_folder": str(tmp_path / "unused"), "master_sync_folder": str(master_dir)})
+        post("/devices", {"id": "dev-phone", "name": "Phone", "host": "127.0.0.1", "port": str(port), "capabilities": "mobile", "sync_roots_json": roots_json})
+
+        (master_dir / "obsidian" / "note.md").parent.mkdir(parents=True)
+        (master_dir / "obsidian" / "note.md").write_text("master note")
+
+        _, pull = post("/pull", {"device_id": "dev-phone"})
+        assert "obsidian/note.md" in pull["pulled"]
+        assert (obsidian_local / "note.md").read_text() == "master note"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+

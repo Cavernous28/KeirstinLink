@@ -51,6 +51,7 @@ function renderDevices() {
         <p class="card-title">${escapeHtml(d.name || 'Unknown')}</p>
         <p class="card-meta">${escapeHtml(d.host || 'unknown')}:${d.port || 0} • ${escapeHtml((d.capabilities || []).join(', ') || 'device')}</p>
         <p class="card-meta">Shared: ${escapeHtml((d.shared_folders || []).join(', ') || 'all')}</p>
+        <p class="card-meta">Roots: ${escapeHtml((d.sync_roots || []).map(r => r.local_path + (r.remote_prefix ? ' → ' + r.remote_prefix : '')).join(', ') || 'none')}</p>
       </div>
       <div class="card-actions">
         <button class="btn" data-action="propose" data-id="${d.id}">Propose</button>
@@ -211,6 +212,7 @@ function openAddDevice() {
   $('#device-port').value = '3710';
   $('#device-kind').value = 'mobile';
   $('#device-shared-folders').value = '';
+  renderSyncRoots([]);
   $('#device-modal').classList.add('open');
 }
 
@@ -231,12 +233,71 @@ function openEditDevice(id) {
   $('#device-port').value = String(d.port || 3710);
   $('#device-kind').value = (d.capabilities && d.capabilities[0]) || 'mobile';
   $('#device-shared-folders').value = (d.shared_folders || []).join(', ');
+  renderSyncRoots(d.sync_roots || []);
   $('#device-modal').classList.add('open');
 }
 
 function closeDeviceModal() {
   $('#device-modal').classList.remove('open');
   editingDeviceId = null;
+}
+
+function renderSyncRoots(roots) {
+  const container = $('#sync-roots-list');
+  container.innerHTML = '';
+  const rows = roots.length ? roots : [{ local_path: '', remote_prefix: '' }];
+  rows.forEach((root) => {
+    const row = document.createElement('div');
+    row.className = 'sync-root-row';
+    row.innerHTML = `
+      <input type="text" class="sync-root-local" placeholder="Local folder path" value="${escapeHtml(root.local_path || '')}" />
+      <span class="sync-root-arrow">→</span>
+      <input type="text" class="sync-root-remote" placeholder="Master prefix (e.g. obsidian)" value="${escapeHtml(root.remote_prefix || '')}" />
+      <button type="button" class="btn icon btn-pick-sync-root" title="Pick folder">📁</button>
+      <button type="button" class="btn icon btn-remove-sync-root" title="Remove">×</button>
+    `;
+    container.appendChild(row);
+  });
+}
+
+function collectSyncRoots() {
+  const rows = $$('.sync-root-row');
+  const roots = [];
+  rows.forEach(row => {
+    const local = row.querySelector('.sync-root-local').value.trim();
+    const remote = row.querySelector('.sync-root-remote').value.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    if (local) {
+      roots.push({ local_path: local, remote_prefix: remote });
+    }
+  });
+  return roots;
+}
+
+async function pickSyncRootFolder(btn) {
+  try {
+    const selected = await invoke('pick_folder');
+    if (!selected) return;
+    const row = btn.closest('.sync-root-row');
+    if (!row) return;
+    row.querySelector('.sync-root-local').value = selected;
+  } catch (e) {
+    console.error(e);
+    setError('Pick folder failed: ' + errorMessage(e));
+  }
+}
+
+function addSyncRootRow() {
+  const container = $('#sync-roots-list');
+  const row = document.createElement('div');
+  row.className = 'sync-root-row';
+  row.innerHTML = `
+    <input type="text" class="sync-root-local" placeholder="Local folder path" />
+    <span class="sync-root-arrow">→</span>
+    <input type="text" class="sync-root-remote" placeholder="Master prefix (e.g. obsidian)" />
+    <button type="button" class="btn icon btn-pick-sync-root" title="Pick folder">📁</button>
+    <button type="button" class="btn icon btn-remove-sync-root" title="Remove">×</button>
+  `;
+  container.appendChild(row);
 }
 
 async function saveDevice(e) {
@@ -250,6 +311,7 @@ async function saveDevice(e) {
     port: parseInt($('#device-port').value || '3710', 10),
     kind: $('#device-kind').value,
     shared_folders: $('#device-shared-folders').value.trim(),
+    sync_roots_json: JSON.stringify(collectSyncRoots()),
   };
   try {
     const command = editingDeviceId ? 'update_device' : 'add_device';
@@ -260,29 +322,6 @@ async function saveDevice(e) {
   } catch (err) {
     console.error(err);
     setError('Save device failed: ' + errorMessage(err));
-  }
-}
-
-async function pickSharedFolder() {
-  try {
-    const selected = await invoke('pick_folder');
-    if (!selected) return;
-    // Convert absolute path to relative path inside sync folder
-    const syncRoot = ($('#setting-folder').value.trim() || state.settings.sync_folder || '').replace(/\\/g, '/');
-    const abs = selected.replace(/\\/g, '/');
-    let rel = abs;
-    if (syncRoot && abs.toLowerCase().startsWith(syncRoot.toLowerCase() + '/')) {
-      rel = abs.slice(syncRoot.length + 1);
-    } else {
-      setError(`Pick a folder inside the sync folder (${syncRoot || 'not set'}). Absolute paths outside it won't sync.`);
-      return;
-    }
-    const input = $('#device-shared-folders');
-    const current = input.value.trim();
-    input.value = current ? `${current}, ${rel}` : rel;
-  } catch (e) {
-    console.error(e);
-    setError('Pick shared folder failed: ' + errorMessage(e));
   }
 }
 
@@ -374,7 +413,7 @@ function init() {
   $('#btn-open-folder').addEventListener('click', openFolder);
   $('#btn-browse-master-folder').addEventListener('click', browseMasterFolder);
   $('#btn-open-master-folder').addEventListener('click', openMasterFolder);
-  $('#btn-pick-shared-folder').addEventListener('click', pickSharedFolder);
+  $('#btn-add-sync-root').addEventListener('click', addSyncRootRow);
   $('#settings-form').addEventListener('submit', saveSettings);
   $('#device-form').addEventListener('submit', saveDevice);
 
@@ -388,6 +427,20 @@ function init() {
     else if (action === 'edit-device') openEditDevice(id);
     else if (action === 'sync') syncDevice(id);
     else if (action === 'propose') proposeDevice(id);
+  });
+
+  $('#device-form').addEventListener('click', e => {
+    const btn = e.target.closest('.btn-pick-sync-root');
+    if (btn) {
+      e.preventDefault();
+      pickSyncRootFolder(btn);
+      return;
+    }
+    const removeBtn = e.target.closest('.btn-remove-sync-root');
+    if (removeBtn) {
+      e.preventDefault();
+      removeBtn.closest('.sync-root-row').remove();
+    }
   });
 
   refresh();

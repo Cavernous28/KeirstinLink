@@ -49,6 +49,13 @@ class ProposedChange(BaseModel):
     action: Optional[str] = None  # convenience from payload
 
 
+class SyncRoot(BaseModel):
+    """A single folder pair for a device: local path -> remote prefix."""
+
+    local_path: str  # absolute path on the local device
+    remote_prefix: str = ""  # path inside the master sync folder (empty = root)
+
+
 class DeviceInfo(BaseModel):
     id: str
     name: str
@@ -57,3 +64,4 @@ class DeviceInfo(BaseModel):
     last_seen: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     capabilities: list[str] = Field(default_factory=list)
     shared_folders: list[str] = Field(default_factory=list)
+    sync_roots: list[SyncRoot] = Field(default_factory=list)

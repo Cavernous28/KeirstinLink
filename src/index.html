@@ -130,12 +130,19 @@
             </label>
 
             <label>
-              <span>Shared folders (relative to sync folder; leave blank for all)</span>
+              <span>Shared folders (legacy; leave blank for all)</span>
               <input type="text" id="device-shared-folders" placeholder="e.g. obsidian, shared/photos" />
-              <button type="button" id="btn-pick-shared-folder" class="btn">Pick folder...</button>
             </label>
 
-            <p class="hint">* Name is required.</p>
+            <label>
+              <span>Sync roots — map local folders to master prefixes</span>
+            </label>
+            <div id="sync-roots-list" class="sync-roots-list">
+              <!-- rows injected by JS -->
+            </div>
+            <button type="button" id="btn-add-sync-root" class="btn">+ Add sync root</button>
+
+            <p class="hint">* Name is required. Sync roots let you sync folders in-place instead of copying them into the sync folder.</p>
 
             <div class="modal-actions">
               <button type="submit" class="btn primary">Save</button>

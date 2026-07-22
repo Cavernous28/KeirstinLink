@@ -23,6 +23,7 @@ struct DeviceAddPayload {
     port: u16,
     kind: String,
     shared_folders: String,
+    sync_roots_json: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -174,6 +175,7 @@ fn add_device(payload: DeviceAddPayload) -> Result<serde_json::Value, String> {
             ("port".to_string(), payload.port.to_string()),
             ("capabilities".to_string(), payload.kind),
             ("shared_folders".to_string(), payload.shared_folders),
+            ("sync_roots_json".to_string(), payload.sync_roots_json),
         ],
     )
 }
@@ -189,6 +191,7 @@ fn update_device(payload: DeviceAddPayload) -> Result<serde_json::Value, String>
             ("port".to_string(), payload.port.to_string()),
             ("capabilities".to_string(), payload.kind),
             ("shared_folders".to_string(), payload.shared_folders),
+            ("sync_roots_json".to_string(), payload.sync_roots_json),
         ],
     )
 }

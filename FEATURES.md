@@ -6,6 +6,8 @@
 
 - [x] **Open sync/master folder from Settings** — Open buttons
 - [x] **Real folder picker for Browse buttons** — replaced `prompt()` with Tauri dialog plugin
+- [x] **Per-device shared folders** — device add/edit modal with folder picker + relative paths
+- [x] **Device add/edit modal** — create and update devices, set host/port/kind/shared folders
 
 ## UI / UX
 
