@@ -411,3 +411,10 @@ html, body, #app {
 .card.conflict {
   border-left: 4px solid #b71c1c;
 }
+
+
+button:disabled,
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

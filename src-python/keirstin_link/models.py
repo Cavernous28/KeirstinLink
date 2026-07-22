@@ -66,3 +66,4 @@ class DeviceInfo(BaseModel):
     capabilities: list[str] = Field(default_factory=list)
     shared_folders: list[str] = Field(default_factory=list)
     sync_roots: list[SyncRoot] = Field(default_factory=list)
+    token: Optional[str] = None

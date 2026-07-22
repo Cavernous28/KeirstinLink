@@ -1,5 +1,6 @@
 """FastAPI HTTP server."""
 
+import hmac
 import hashlib
 import json
 import os
@@ -16,7 +17,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, Response, Uploa
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
-from .config import DATA_DIR, MAX_VERSIONS, PORT
+from .config import DATA_DIR, DEVICE_TOKEN, MAX_VERSIONS, PORT
 from .discovery import get_discovered_peers
 from .folder_index import index_sync_folder, rebuild_files_index
 from .models import ChangeStatus, DeviceInfo, FileEntry, ProposedChange, SyncRoot
@@ -38,9 +39,45 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _require_device_token(device: DeviceInfo, token: str | None) -> None:
+    if not device.token:
+        return
+    if token is None:
+        raise HTTPException(status_code=401, detail="Device token required")
+    # Use constant-time comparison to avoid timing leaks
+    if not hmac.compare_digest(device.token, token):
+        raise HTTPException(status_code=403, detail="Invalid device token")
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"status": "ok", "service": "KeirstinLink", "port": PORT}
+
+
+@app.get("/my-token")
+def my_token() -> dict[str, Any]:
+    """Return this device's pairing token. Only expose on localhost / trusted networks."""
+    return {"token": DEVICE_TOKEN}
+
+
+@app.post("/pair")
+def pair_device(
+    device_id: str = Form(...),
+    token: str = Form(...),
+) -> dict[str, Any]:
+    """Pair with a remote device by storing its token.
+
+    This is called by the client toward the master: the client tells the master
+    "I am device_id and here is my token". The master stores the token and replies
+    with the master's own token so the client can authenticate back.
+    """
+    device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    device.token = token
+    device.last_seen = _now()
+    DeviceStore.upsert_device(device)
+    return {"master_token": DEVICE_TOKEN}
 
 
 @app.get("/state")
@@ -98,8 +135,15 @@ def _hash_file(path: Path, block_size: int = 65536) -> str:
 
 
 @app.get("/folder-index")
-def folder_index() -> list[dict[str, Any]]:
+def folder_index(
+    device_id: str = "",
+    token: str = "",
+) -> list[dict[str, Any]]:
     """Return the current contents of the sync folder with hashes."""
+    if device_id:
+        device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
+        if device:
+            _require_device_token(device, token or None)
     return [e.model_dump() for e in index_sync_folder()]
 
 
@@ -126,7 +170,11 @@ async def scan_local(
         base_url = f"http://{device.host}:{device.port}"
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"{base_url}/folder-index")
+                params = {}
+                if device.token:
+                    params["device_id"] = SettingsStore.load().device_name or "client"
+                    params["token"] = device.token
+                resp = await client.get(f"{base_url}/folder-index", params=params)
                 resp.raise_for_status()
                 remote_index = resp.json()
         except Exception as e:
@@ -269,7 +317,12 @@ def rebuild_index() -> dict[str, Any]:
 
 
 @app.get("/files/download")
-def download_file(path: str, request: Request) -> Response:
+def download_file(
+    path: str,
+    request: Request,
+    device_id: str = "",
+    token: str = "",
+) -> Response:
     """Download a file from the master sync folder by relative path.
 
     Supports Range requests for chunked/resumable transfers.
@@ -281,6 +334,11 @@ def download_file(path: str, request: Request) -> Response:
         raise HTTPException(status_code=403, detail="Access denied")
     if not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
+
+    if device_id:
+        device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
+        if device:
+            _require_device_token(device, token or None)
 
     file_size = target.stat().st_size
     range_header = request.headers.get("range")
@@ -336,6 +394,8 @@ def upload_chunk(
     relative_path: str = Form(...),
     chunk_index: int = Form(...),
     total_chunks: int = Form(...),
+    device_id: str = Form(""),
+    token: str = Form(""),
     file: UploadFile = File(...),
 ) -> dict[str, Any]:
     """Receive a single chunk of a file upload. Assemble once all chunks arrive."""
@@ -343,6 +403,11 @@ def upload_chunk(
     target_path = (master_root / relative_path).resolve()
     if not str(target_path).startswith(str(master_root.resolve())):
         raise HTTPException(status_code=403, detail="Access denied")
+
+    if device_id:
+        device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
+        if device:
+            _require_device_token(device, token or None)
 
     chunk_dir = DATA_DIR / "upload_chunks" / relative_path.replace("/", "-").replace("\\", "-")
     chunk_dir.mkdir(parents=True, exist_ok=True)
@@ -391,7 +456,11 @@ async def pull_device(device_id: str = Form(...), remote_index_json: str = Form(
         base_url = f"http://{device.host}:{device.port}"
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"{base_url}/folder-index")
+                params = {}
+                if device.token:
+                    params["device_id"] = SettingsStore.load().device_name or "client"
+                    params["token"] = device.token
+                resp = await client.get(f"{base_url}/folder-index", params=params)
                 resp.raise_for_status()
                 remote_index = resp.json()
         except Exception as e:
@@ -421,8 +490,11 @@ async def pull_device(device_id: str = Form(...), remote_index_json: str = Form(
             if need_download:
                 try:
                     safe_rel = remote_path.replace("\\", "/")
-                    encoded_path = urllib.parse.quote(safe_rel)
-                    resp = await client.get(f"{base_url}/files/download?path={encoded_path}")
+                    download_params = {"path": safe_rel}
+                    if device.token:
+                        download_params["device_id"] = SettingsStore.load().device_name or "client"
+                        download_params["token"] = device.token
+                    resp = await client.get(f"{base_url}/files/download", params=download_params)
                     resp.raise_for_status()
                     total_size = int(resp.headers.get("content-length", str(len(resp.content))))
 
@@ -433,7 +505,8 @@ async def pull_device(device_id: str = Form(...), remote_index_json: str = Form(
                             end = min(offset + CHUNK_SIZE - 1, total_size - 1)
                             headers = {"Range": f"bytes={offset}-{end}"}
                             chunk_resp = await client.get(
-                                f"{base_url}/files/download?path={encoded_path}",
+                                f"{base_url}/files/download",
+                                params=download_params,
                                 headers=headers,
                             )
                             chunk_resp.raise_for_status()
@@ -488,15 +561,15 @@ async def propose_files(
             if action == "delete":
                 change_id = str(uuid4())
                 try:
-                    resp = await client.post(
-                        f"{base_url}/receive-proposal",
-                        data={
-                            "relative_path": rel_path,
-                            "action": action,
-                            "source_device": source_device,
-                            "change_id": change_id,
-                        },
-                    )
+                    data = {
+                        "relative_path": rel_path,
+                        "action": action,
+                        "source_device": source_device,
+                        "change_id": change_id,
+                    }
+                    if device.token:
+                        data["token"] = device.token
+                    resp = await client.post(f"{base_url}/receive-proposal", data=data)
                     resp.raise_for_status()
                     proposed.append(resp.json())
                 except Exception as e:
@@ -527,7 +600,16 @@ async def propose_files(
                             "total_chunks": (None, str(total_chunks)),
                             "file": (local_path.name, chunk, "application/octet-stream"),
                         }
-                        resp = await client.post(f"{base_url}/files/upload-chunk", files=files)
+                        chunk_fields = {
+                            "relative_path": (None, rel_path),
+                            "chunk_index": (None, str(idx)),
+                            "total_chunks": (None, str(total_chunks)),
+                            "device_id": (None, source_device),
+                        }
+                        if device.token:
+                            chunk_fields["token"] = (None, device.token)
+                        chunk_fields["file"] = (local_path.name, chunk, "application/octet-stream")
+                        resp = await client.post(f"{base_url}/files/upload-chunk", files=chunk_fields)
                         resp.raise_for_status()
 
                 files = {
@@ -536,8 +618,10 @@ async def propose_files(
                     "source_device": (None, source_device),
                     "change_id": (None, change_id),
                     "assembled": (None, "true"),
-                    "file": (local_path.name, b"", "application/octet-stream"),
                 }
+                if device.token:
+                    files["token"] = (None, device.token)
+                files["file"] = (local_path.name, b"", "application/octet-stream")
                 resp = await client.post(f"{base_url}/receive-proposal", files=files)
                 resp.raise_for_status()
                 proposed.append(resp.json())
@@ -554,6 +638,7 @@ def receive_proposal(
     source_device: str = Form(""),
     change_id: str = Form(""),
     assembled: bool = Form(False),
+    token: str = Form(""),
     file: UploadFile = File(None),
 ) -> dict[str, Any]:
     """Master: receive a single file proposal from a client and queue it for approval.
@@ -575,6 +660,11 @@ def receive_proposal(
 
     if not change_id:
         change_id = str(uuid4())
+
+    # If the device is already paired, the caller must supply its token.
+    device = next((d for d in DeviceStore.list_devices() if d.id == source_name), None)
+    if device:
+        _require_device_token(device, token or None)
 
     upload_dest: Path | None = None
     proposed_checksum: str | None = None
@@ -821,6 +911,7 @@ def register_device(
     capabilities: str = Form(""),
     shared_folders: str = Form(""),
     sync_roots_json: str = Form(""),
+    token: str = Form(""),
 ) -> dict[str, Any]:
     roots = []
     if sync_roots_json:
@@ -836,6 +927,7 @@ def register_device(
         capabilities=[c.strip() for c in capabilities.split(",") if c.strip()],
         shared_folders=[f.strip().replace("\\", "/").strip("/") for f in shared_folders.split(",") if f.strip()],
         sync_roots=roots,
+        token=token or None,
     )
     DeviceStore.upsert_device(device)
     return device.model_dump()
@@ -850,6 +942,7 @@ def update_device(
     capabilities: str = Form(""),
     shared_folders: str = Form(""),
     sync_roots_json: str = Form(""),
+    token: str = Form(""),
 ) -> dict[str, Any]:
     device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
     if not device:
@@ -869,6 +962,8 @@ def update_device(
             device.sync_roots = _parse_sync_roots(json.loads(sync_roots_json))
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid JSON in sync_roots_json")
+    if token:
+        device.token = token
     DeviceStore.upsert_device(device)
     return device.model_dump()
 

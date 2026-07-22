@@ -28,6 +28,8 @@ struct DeviceAddPayload {
     kind: String,
     shared_folders: String,
     sync_roots_json: String,
+    #[serde(default)]
+    token: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -45,6 +47,12 @@ struct ApprovePayload {
 struct ResolvePayload {
     id: String,
     resolution: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PairPayload {
+    id: String,
+    token: String,
 }
 
 
@@ -197,34 +205,36 @@ fn add_device(payload: DeviceAddPayload) -> Result<serde_json::Value, String> {
     } else {
         payload.id
     };
-    http_post_form(
-        "/devices",
-        &[
-            ("id".to_string(), id),
-            ("name".to_string(), payload.name),
-            ("host".to_string(), payload.host),
-            ("port".to_string(), payload.port.to_string()),
-            ("capabilities".to_string(), payload.kind),
-            ("shared_folders".to_string(), payload.shared_folders),
-            ("sync_roots_json".to_string(), payload.sync_roots_json),
-        ],
-    )
+    let mut form = vec![
+        ("id".to_string(), id),
+        ("name".to_string(), payload.name),
+        ("host".to_string(), payload.host),
+        ("port".to_string(), payload.port.to_string()),
+        ("capabilities".to_string(), payload.kind),
+        ("shared_folders".to_string(), payload.shared_folders),
+        ("sync_roots_json".to_string(), payload.sync_roots_json),
+    ];
+    if !payload.token.is_empty() {
+        form.push(("token".to_string(), payload.token));
+    }
+    http_post_form("/devices", &form)
 }
 
 #[tauri::command]
 fn update_device(payload: DeviceAddPayload) -> Result<serde_json::Value, String> {
     let id = urlencoding::encode(&payload.id);
-    http_put_form(
-        &format!("/devices/{}", id),
-        &[
-            ("name".to_string(), payload.name),
-            ("host".to_string(), payload.host),
-            ("port".to_string(), payload.port.to_string()),
-            ("capabilities".to_string(), payload.kind),
-            ("shared_folders".to_string(), payload.shared_folders),
-            ("sync_roots_json".to_string(), payload.sync_roots_json),
-        ],
-    )
+    let mut form = vec![
+        ("name".to_string(), payload.name),
+        ("host".to_string(), payload.host),
+        ("port".to_string(), payload.port.to_string()),
+        ("capabilities".to_string(), payload.kind),
+        ("shared_folders".to_string(), payload.shared_folders),
+        ("sync_roots_json".to_string(), payload.sync_roots_json),
+    ];
+    if !payload.token.is_empty() {
+        form.push(("token".to_string(), payload.token));
+    }
+    http_put_form(&format!("/devices/{}", id), &form)
 }
 
 #[tauri::command]
@@ -250,6 +260,30 @@ fn resolve_conflict(payload: ResolvePayload) -> Result<serde_json::Value, String
             ("resolution".to_string(), payload.resolution),
         ],
     )
+}
+
+#[tauri::command]
+fn pair_device(payload: PairPayload) -> Result<serde_json::Value, String> {
+    let result = http_post_form(
+        "/pair",
+        &[
+            ("device_id".to_string(), payload.id.clone()),
+            ("token".to_string(), payload.token.clone()),
+        ],
+    )?;
+    if let Some(master_token) = result.get("master_token").and_then(|v| v.as_str()) {
+        let _ = update_device(DeviceAddPayload {
+            id: payload.id.clone(),
+            name: String::new(),
+            host: String::new(),
+            port: 0,
+            kind: String::new(),
+            shared_folders: String::new(),
+            sync_roots_json: String::new(),
+            token: master_token.to_string(),
+        });
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -372,6 +406,7 @@ pub fn run() {
             remove_device,
             approve_device,
             resolve_conflict,
+            pair_device,
             sync_device,
             propose_device,
             get_folder_index,

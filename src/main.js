@@ -62,6 +62,7 @@ function renderDevices() {
       <div class="card-actions">
         <button class="btn" data-action="propose" data-id="${d.id}">Propose</button>
         <button class="btn" data-action="sync" data-id="${d.id}">Sync</button>
+        <button class="btn" data-action="pair" data-id="${d.id}" ${d.token ? 'disabled title="Paired"' : ''}>${d.token ? 'Paired' : 'Pair'}</button>
         <button class="btn" data-action="edit-device" data-id="${d.id}">Edit</button>
         <button class="btn danger" data-action="remove-device" data-id="${d.id}">Remove</button>
       </div>
@@ -524,6 +525,24 @@ async function resolveConflict(id, resolution) {
   }
 }
 
+async function pairDevice(id) {
+  const d = state.devices.find(x => x.id === id);
+  if (!d) return setError('Device not found');
+  setStatus(`Pairing with ${d.name || id}...`, 0);
+  try {
+    // Fetch our own token from the local backend, then tell the remote master who we are.
+    const myTokenResp = await fetch('http://127.0.0.1:3710/my-token');
+    if (!myTokenResp.ok) throw new Error('Could not fetch local device token');
+    const { token } = await myTokenResp.json();
+    await invoke('pair_device', { payload: { id, token } });
+    await refresh();
+    setStatus(`✨ Paired with ${d.name || id}`, 3);
+  } catch (e) {
+    console.error(e);
+    setError('Pairing failed: ' + errorMessage(e));
+  }
+}
+
 async function proposeDevice(id) {
   setStatus(`Scanning + proposing changes for ${id}...`, 0);
   try {
@@ -569,6 +588,7 @@ function init() {
     else if (action === 'remove-device') removeDevice(id);
     else if (action === 'edit-device') openEditDevice(id);
     else if (action === 'sync') syncDevice(id);
+    else if (action === 'pair') pairDevice(id);
     else if (action === 'propose') proposeDevice(id);
     else if (action === 'add-discovered') addDiscoveredDevice(btn.dataset.name, btn.dataset.host, parseInt(btn.dataset.port || '3710', 10));
   });
