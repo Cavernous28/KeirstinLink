@@ -70,18 +70,23 @@ function renderPending() {
     list.innerHTML = '<p class="empty">No pending approvals.</p>';
     return;
   }
-  list.innerHTML = state.pending.map(a => `
+  list.innerHTML = state.pending.map(a => {
+    const payload = a.payload || {};
+    const target = payload.target_filename || payload.relative_path || a.relative_path || 'unknown';
+    const targetDisplay = String(target).replace(/\\/g, '\');
+    return `
     <div class="card">
       <div class="card-info">
         <p class="card-title">${escapeHtml(a.file_id || 'Unknown')}</p>
-        <p class="card-meta">${escapeHtml(a.source_device || 'unknown device')} • ${escapeHtml(a.id)}</p>
+        <p class="card-meta">${escapeHtml(a.source_device || 'unknown device')} → ${escapeHtml(targetDisplay)}</p>
+        <p class="card-meta">${escapeHtml(a.id)}</p>
       </div>
       <div class="card-actions">
         <button class="btn success" data-action="approve" data-id="${a.id}" data-approve="true">Approve</button>
         <button class="btn danger" data-action="approve" data-id="${a.id}" data-approve="false">Deny</button>
       </div>
     </div>
-  `).join('');
+  `}).join('');
 }
 
 function renderFiles() {
@@ -91,13 +96,32 @@ function renderFiles() {
     list.innerHTML = '<p class="empty">No synced files yet.</p>';
     return;
   }
-  list.innerHTML = state.files.map(f => `
-    <div class="card">
-      <div class="card-info">
-        <p class="card-title">${escapeHtml(f.name || 'Unknown')}</p>
-        <p class="card-meta">${formatBytes(f.size || 0)} • ${escapeHtml(f.path || '')}</p>
+
+  // Group files by source device
+  const groups = {};
+  state.files.forEach(f => {
+    const source = f.source_device || 'Unknown device';
+    if (!groups[source]) groups[source] = [];
+    groups[source].push(f);
+  });
+
+  list.innerHTML = Object.entries(groups).map(([source, files]) => `
+    <details class="sync-group" open>
+      <summary class="sync-group-header">
+        <span>${escapeHtml(source)}</span>
+        <span class="badge">${files.length}</span>
+      </summary>
+      <div class="sync-group-list">
+        ${files.map(f => `
+          <div class="card small">
+            <div class="card-info">
+              <p class="card-title">${escapeHtml(f.name || 'Unknown')}</p>
+              <p class="card-meta">${formatBytes(f.size || 0)} • ${escapeHtml((f.path || '').replace(/\\/g, '\'))}</p>
+            </div>
+          </div>
+        `).join('')}
       </div>
-    </div>
+    </details>
   `).join('');
 }
 

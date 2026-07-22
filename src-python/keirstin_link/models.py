@@ -20,6 +20,7 @@ class FileEntry(BaseModel):
     modified: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     checksum: Optional[str] = None
     tags: list[str] = Field(default_factory=list)
+    source_device: Optional[str] = None
 
 
 class VersionSnapshot(BaseModel):

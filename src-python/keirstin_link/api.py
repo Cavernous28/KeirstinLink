@@ -409,6 +409,12 @@ def receive_proposal(
     if not str(target_path).startswith(str(master_root.resolve())):
         raise HTTPException(status_code=403, detail="Access denied")
 
+    source_name = source_device or None
+    # Dedupe: if a pending change for the same relative_path + source already exists, return it
+    for existing in PendingStore.list_changes(status=ChangeStatus.PENDING):
+        if existing.relative_path == relative_path and existing.source_device == source_name:
+            return existing.model_dump()
+
     if not change_id:
         change_id = str(uuid4())
 
@@ -422,7 +428,7 @@ def receive_proposal(
     change = ProposedChange(
         id=change_id,
         file_id=file_id,
-        source_device=source_device or None,
+        source_device=source_name,
         relative_path=relative_path,
         action=action,
         payload={
@@ -444,6 +450,7 @@ def receive_proposal(
         modified=_now(),
         checksum=_hash_file(upload_dest),
         tags=[relative_path],
+        source_device=source_name,
     )
     FileStore.upsert_file(entry)
 
@@ -485,6 +492,7 @@ def _apply_approved_change(change: ProposedChange) -> None:
                 modified=_now(),
                 checksum=_hash_file(target),
                 tags=[relative_path] if relative_path else [],
+                source_device=change.source_device,
             )
             FileStore.upsert_file(entry)
 
