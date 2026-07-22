@@ -96,13 +96,28 @@ fn wait_for_backend(deadline: Instant) -> Result<(), String> {
     Err("Python backend did not start in time".to_string())
 }
 
-fn start_backend() -> Result<Option<Child>, String> {
-    let dir = py_backend_dir();
-    if !dir.exists() {
-        // Packaged builds may bundle the backend differently; fall back to assuming it's already running.
-        return Ok(None);
+fn bundled_backend_exe() -> Option<std::path::PathBuf> {
+    // Tauri v2 places bundled resources next to the executable under `../resources/`.
+    let exe = std::env::current_exe().unwrap_or_default();
+    let base = if exe.is_file() {
+        exe.parent()?.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default()
+    };
+    let candidates = [
+        base.join("keirstinlink_backend.exe"),
+        base.join("resources").join("keirstinlink_backend.exe"),
+        base.join("..").join("resources").join("keirstinlink_backend.exe"),
+    ];
+    for path in &candidates {
+        if path.is_file() {
+            return Some(path.clone());
+        }
     }
+    None
+}
 
+fn start_backend() -> Result<Option<Child>, String> {
     // If a backend is already listening, reuse it instead of failing to bind.
     if ureq::get(&format!("{}/health", PY_BASE_URL))
         .timeout(Duration::from_secs(2))
@@ -113,28 +128,51 @@ fn start_backend() -> Result<Option<Child>, String> {
         return Ok(None);
     }
 
-    let python_cmd = if cfg!(windows) { "python" } else { "python3" };
+    let (program, args, cwd): (String, Vec<String>, Option<std::path::PathBuf>);
+    let dir = py_backend_dir();
+    if dir.exists() {
+        // Dev mode: run from the Python source tree.
+        let python_cmd = if cfg!(windows) { "python" } else { "python3" };
+        program = python_cmd.to_string();
+        args = vec![
+            "-m".to_string(),
+            "keirstin_link.main".to_string(),
+            "--host".to_string(),
+            "127.0.0.1".to_string(),
+            "--port".to_string(),
+            "3710".to_string(),
+        ];
+        cwd = Some(dir);
+    } else if let Some(exe_path) = bundled_backend_exe() {
+        // Packaged build: run the bundled PyInstaller backend executable.
+        program = exe_path.to_string_lossy().to_string();
+        args = vec![
+            "--host".to_string(),
+            "127.0.0.1".to_string(),
+            "--port".to_string(),
+            "3710".to_string(),
+        ];
+        cwd = Some(exe_path.parent().unwrap_or(&exe_path).to_path_buf());
+    } else {
+        // No backend source or bundle found; assume it's already running.
+        return Ok(None);
+    }
 
     #[cfg(windows)]
-    let mut cmd = {
+    let mut child = {
         use std::os::windows::process::CommandExt;
-        let mut c = Command::new(python_cmd);
+        let mut c = Command::new(&program);
         c.creation_flags(CREATE_NO_WINDOW);
         c
     };
     #[cfg(not(windows))]
-    let mut cmd = Command::new(python_cmd);
+    let mut child = Command::new(&program);
 
-    let mut child = cmd
-        .arg("-m")
-        .arg("keirstin_link.main")
-        .arg("--host")
-        .arg("127.0.0.1")
-        .arg("--port")
-        .arg("3710")
-        .current_dir(&dir)
+    let mut child = child
+        .args(&args)
+        .current_dir(cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_default()))
         .spawn()
-        .map_err(|e| format!("failed to spawn Python backend: {}", e))?;
+        .map_err(|e| format!("failed to spawn Python backend ({}): {}", program, e))?;
 
     let deadline = Instant::now() + Duration::from_secs(PY_START_TIMEOUT_SECONDS);
     match wait_for_backend(deadline) {
