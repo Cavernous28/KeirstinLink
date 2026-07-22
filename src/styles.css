@@ -407,3 +407,7 @@ html, body, #app {
   color: var(--text-dim);
   font-size: 0.85rem;
 }
+
+.card.conflict {
+  border-left: 4px solid #b71c1c;
+}

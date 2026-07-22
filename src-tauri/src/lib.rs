@@ -42,6 +42,13 @@ struct ApprovePayload {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+struct ResolvePayload {
+    id: String,
+    resolution: String,
+}
+
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct ConnectRemotePayload {
     host: String,
     port: u16,
@@ -235,6 +242,17 @@ fn approve_device(payload: ApprovePayload) -> Result<serde_json::Value, String> 
 }
 
 #[tauri::command]
+fn resolve_conflict(payload: ResolvePayload) -> Result<serde_json::Value, String> {
+    http_post_form(
+        "/resolve-conflict",
+        &[
+            ("change_id".to_string(), payload.id),
+            ("resolution".to_string(), payload.resolution),
+        ],
+    )
+}
+
+#[tauri::command]
 fn get_settings() -> Result<serde_json::Value, String> {
     http_get("/settings")
 }
@@ -353,6 +371,7 @@ pub fn run() {
             update_device,
             remove_device,
             approve_device,
+            resolve_conflict,
             sync_device,
             propose_device,
             get_folder_index,

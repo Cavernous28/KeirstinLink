@@ -453,6 +453,7 @@ def receive_proposal(
         change_id = str(uuid4())
 
     upload_dest: Path | None = None
+    proposed_checksum: str | None = None
     if action in ("create", "update"):
         if file is None:
             raise HTTPException(status_code=400, detail="File upload required for create/update")
@@ -461,8 +462,18 @@ def receive_proposal(
         upload_dest = pending_dir / target_path.name
         with upload_dest.open("wb") as f:
             shutil.copyfileobj(file.file, f)
+        proposed_checksum = _hash_file(upload_dest)
 
     file_id = f"file-{relative_path.replace('/', '-').replace(' ', '_')}"
+
+    # Conflict detection: for updates, if master file exists and has a different checksum, flag it.
+    conflict = False
+    current_checksum: str | None = None
+    if action == "update" and target_path.exists():
+        current_checksum = _hash_file(target_path)
+        if proposed_checksum and proposed_checksum != current_checksum:
+            conflict = True
+
     change = ProposedChange(
         id=change_id,
         file_id=file_id,
@@ -475,6 +486,9 @@ def receive_proposal(
             "uploaded_filename": str(upload_dest) if upload_dest else None,
             "target_filename": str(target_path),
             "original_exists": target_path.exists(),
+            "conflict": conflict,
+            "current_checksum": current_checksum,
+            "proposed_checksum": proposed_checksum,
         },
     )
     PendingStore.save_change(change)
@@ -486,7 +500,7 @@ def receive_proposal(
             path=str(target_path),
             size=upload_dest.stat().st_size,
             modified=_now(),
-            checksum=_hash_file(upload_dest),
+            checksum=proposed_checksum,
             tags=[relative_path],
             source_device=source_name,
         )
@@ -503,6 +517,36 @@ def approve_change(change_id: str = Form(...)) -> dict[str, Any]:
 
     _apply_approved_change(change)
     return change.model_dump()
+
+
+@app.post("/resolve-conflict")
+def resolve_conflict(
+    change_id: str = Form(...),
+    resolution: str = Form(...),
+) -> dict[str, Any]:
+    """Resolve a conflicted proposal: 'accept' (incoming), 'keep' (master), or 'reject'."""
+    change = PendingStore.get_change(change_id)
+    if not change:
+        raise HTTPException(status_code=404, detail="Change not found")
+
+    payload = change.payload or {}
+    if not payload.get("conflict"):
+        raise HTTPException(status_code=400, detail="Change is not in conflict")
+
+    if resolution not in ("accept", "keep", "reject"):
+        raise HTTPException(status_code=400, detail="Resolution must be accept, keep, or reject")
+
+    if resolution == "reject":
+        return reject_change(change_id)
+
+    if resolution == "accept":
+        change.status = ChangeStatus.APPROVED
+        PendingStore.save_change(change)
+        _apply_approved_change(change)
+        return change.model_dump()
+
+    # resolution == "keep": reject the proposal, leaving master file untouched
+    return reject_change(change_id)
 
 
 def _apply_approved_change(change: ProposedChange) -> None:

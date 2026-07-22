@@ -106,16 +106,27 @@ function renderPending() {
     const targetDisplay = String(target).replace(/\\\\/g, '\\');
     const actionLabel = a.action ? a.action.toUpperCase() : 'CHANGE';
     const actionClass = a.action === 'delete' ? 'danger' : (a.action === 'update' ? 'warning' : 'success');
+    const conflict = payload.conflict;
+    const conflictBadge = conflict ? '<span class="badge danger">CONFLICT</span> ' : '';
+    const actions = conflict
+      ? `
+        <button class="btn success" data-action="resolve" data-id="${a.id}" data-resolution="accept">Accept Incoming</button>
+        <button class="btn" data-action="resolve" data-id="${a.id}" data-resolution="keep">Keep Master</button>
+        <button class="btn danger" data-action="resolve" data-id="${a.id}" data-resolution="reject">Reject</button>
+      `
+      : `
+        <button class="btn success" data-action="approve" data-id="${a.id}" data-approve="true">Approve</button>
+        <button class="btn danger" data-action="approve" data-id="${a.id}" data-approve="false">Deny</button>
+      `;
     return `
-    <div class="card">
+    <div class="card ${conflict ? 'conflict' : ''}">
       <div class="card-info">
         <p class="card-title">${escapeHtml(a.file_id || 'Unknown')}</p>
-        <p class="card-meta"><span class="badge ${actionClass}">${escapeHtml(actionLabel)}</span> ${escapeHtml(a.source_device || 'unknown device')} → ${escapeHtml(targetDisplay)}</p>
+        <p class="card-meta">${conflictBadge}<span class="badge ${actionClass}">${escapeHtml(actionLabel)}</span> ${escapeHtml(a.source_device || 'unknown device')} → ${escapeHtml(targetDisplay)}</p>
         <p class="card-meta">${escapeHtml(a.id)}</p>
       </div>
       <div class="card-actions">
-        <button class="btn success" data-action="approve" data-id="${a.id}" data-approve="true">Approve</button>
-        <button class="btn danger" data-action="approve" data-id="${a.id}" data-approve="false">Deny</button>
+        ${actions}
       </div>
     </div>
   `}).join('');
@@ -501,6 +512,18 @@ async function addDiscoveredDevice(name, host, port) {
   }
 }
 
+async function resolveConflict(id, resolution) {
+  try {
+    await invoke('resolve_conflict', { payload: { id, resolution } });
+    await refresh();
+    const labels = { accept: 'Accepted incoming', keep: 'Kept master', reject: 'Rejected' };
+    setStatus(labels[resolution] || 'Resolved', 3);
+  } catch (e) {
+    console.error(e);
+    setError('Resolve conflict failed: ' + errorMessage(e));
+  }
+}
+
 async function proposeDevice(id) {
   setStatus(`Scanning + proposing changes for ${id}...`, 0);
   try {
@@ -542,6 +565,7 @@ function init() {
     const action = btn.dataset.action;
     const id = btn.dataset.id;
     if (action === 'approve') approve(id, btn.dataset.approve === 'true');
+    else if (action === 'resolve') resolveConflict(id, btn.dataset.resolution);
     else if (action === 'remove-device') removeDevice(id);
     else if (action === 'edit-device') openEditDevice(id);
     else if (action === 'sync') syncDevice(id);
