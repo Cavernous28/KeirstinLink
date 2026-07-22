@@ -203,6 +203,9 @@ fn remove_device(payload: ByIdPayload) -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 fn approve_device(payload: ApprovePayload) -> Result<serde_json::Value, String> {
+    if payload.id == "__all__" {
+        return http_post_form("/approve-all", &[]);
+    }
     let path = if payload.approved { "/approve" } else { "/reject" };
     http_post_form(path, &[("change_id".to_string(), payload.id)])
 }

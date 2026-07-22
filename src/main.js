@@ -365,6 +365,26 @@ async function approve(id, approved) {
   }
 }
 
+async function approveAll() {
+  if (!state.pending.length) return setStatus('No pending approvals');
+  if (!confirm(`Approve all ${state.pending.length} pending file(s)?`)) return;
+  setStatus(`Approving ${state.pending.length} change(s)...`);
+  try {
+    const result = await invoke('approve_device', { payload: { id: '__all__', approved: true } });
+    await refresh();
+    const count = result.count || 0;
+    const failed = result.failed || [];
+    if (failed.length) {
+      setError(`Approved ${count}, failed ${failed.length}`);
+    } else {
+      setStatus(`✨ Approved ${count} change(s)`);
+    }
+  } catch (e) {
+    console.error(e);
+    setError('Approve all failed: ' + errorMessage(e));
+  }
+}
+
 async function syncDevice(id) {
   setStatus(`Syncing device ${id}...`);
   try {
@@ -417,6 +437,7 @@ function init() {
   $('#btn-browse-master-folder').addEventListener('click', browseMasterFolder);
   $('#btn-open-master-folder').addEventListener('click', openMasterFolder);
   $('#btn-add-sync-root').addEventListener('click', addSyncRootRow);
+  $('#btn-approve-all').addEventListener('click', approveAll);
   $('#settings-form').addEventListener('submit', saveSettings);
   $('#device-form').addEventListener('submit', saveDevice);
 

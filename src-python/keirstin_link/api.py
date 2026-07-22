@@ -456,6 +456,12 @@ def approve_change(change_id: str = Form(...)) -> dict[str, Any]:
     if not change:
         raise HTTPException(status_code=404, detail="Change not found")
 
+    _apply_approved_change(change)
+    return change.model_dump()
+
+
+def _apply_approved_change(change: ProposedChange) -> None:
+    """Copy pending file to master target, snapshot existing file, update index."""
     payload = change.payload or {}
     target_filename = payload.get("target_filename")
     uploaded_filename = payload.get("uploaded_filename")
@@ -468,7 +474,7 @@ def approve_change(change_id: str = Form(...)) -> dict[str, Any]:
         if source.exists():
             # Snapshot existing file before overwrite
             if target.exists():
-                SnapshotStore.create(change.file_id, source_path=target, note=f"pre-approve {change_id}")
+                SnapshotStore.create(change.file_id, source_path=target, note=f"pre-approve {change.id}")
             shutil.copy2(source, target)
             # Update file entry
             entry = FileEntry(
@@ -482,7 +488,22 @@ def approve_change(change_id: str = Form(...)) -> dict[str, Any]:
             )
             FileStore.upsert_file(entry)
 
-    return change.model_dump()
+
+@app.post("/approve-all")
+def approve_all_changes() -> dict[str, Any]:
+    """Approve every currently pending change."""
+    pending = PendingStore.list_changes(status=ChangeStatus.PENDING)
+    approved = []
+    failed = []
+    for change in pending:
+        try:
+            updated = PendingStore.set_status(change.id, ChangeStatus.APPROVED)
+            if updated:
+                _apply_approved_change(updated)
+                approved.append(change.id)
+        except Exception as e:
+            failed.append({"id": change.id, "error": str(e)})
+    return {"approved": approved, "failed": failed, "count": len(approved)}
 
 
 @app.post("/reject")
