@@ -111,7 +111,7 @@ async def scan_local(
     """Client: compare local sync folder against a remote master index and return a changeset to propose.
 
     If `remote_index_json` is provided, use it directly instead of fetching from the device.
-    Only considers files under the device's configured `shared_folders`.
+    Detects create, update, and delete operations.
     """
     device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
     if not device:
@@ -137,6 +137,7 @@ async def scan_local(
     roots = _iter_sync_roots(device, default_root)
     allowed = _parse_shared_folders(device.shared_folders)
     changes = []
+    local_rels: set[str] = set()
 
     for local_root, remote_prefix in roots:
         if not local_root.exists():
@@ -148,9 +149,9 @@ async def scan_local(
                 stat = local_path.stat()
                 rel_to_root = _normalize_rel_path(str(local_path.relative_to(local_root)))
                 rel = _local_to_remote(rel_to_root, remote_prefix)
-                # Legacy fallback filtering: if no explicit sync roots, honor shared_folders
                 if not device.sync_roots and not _is_under_shared_folders(rel, allowed):
                     continue
+                local_rels.add(rel)
                 local_mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
                 local_checksum = _hash_file(local_path)
                 remote = remote_by_path.get(rel)
@@ -160,6 +161,13 @@ async def scan_local(
                     changes.append({"relative_path": rel, "action": "update", "checksum": local_checksum, "size": stat.st_size, "modified": local_mtime})
             except (OSError, ValueError):
                 continue
+
+    # Detect deletions: files present on master but missing locally
+    for rel in remote_by_path:
+        if not device.sync_roots and not _is_under_shared_folders(rel, allowed):
+            continue
+        if rel not in local_rels:
+            changes.append({"relative_path": rel, "action": "delete"})
 
     return {"device_id": device_id, "changes": changes, "count": len(changes), "sync_roots": [r.model_dump() for r in device.sync_roots]}
 
@@ -370,7 +378,25 @@ async def propose_files(
         for change in changes:
             rel_path = change.get("relative_path", "")
             action = change.get("action", "")
-            if not rel_path or action not in ("create", "update"):
+            if not rel_path or action not in ("create", "update", "delete"):
+                continue
+
+            if action == "delete":
+                change_id = str(uuid4())
+                try:
+                    resp = await client.post(
+                        f"{base_url}/receive-proposal",
+                        data={
+                            "relative_path": rel_path,
+                            "action": action,
+                            "source_device": source_device,
+                            "change_id": change_id,
+                        },
+                    )
+                    resp.raise_for_status()
+                    proposed.append(resp.json())
+                except Exception as e:
+                    proposed.append({"relative_path": rel_path, "error": str(e)})
                 continue
 
             local_root, rel_to_root = _find_sync_root_for_remote(rel_path, roots)
@@ -407,7 +433,7 @@ def receive_proposal(
     action: str = Form(...),
     source_device: str = Form(""),
     change_id: str = Form(""),
-    file: UploadFile = File(...),
+    file: UploadFile = File(None),
 ) -> dict[str, Any]:
     """Master: receive a single file proposal from a client and queue it for approval."""
     master_root = SettingsStore.master_folder_path()
@@ -426,11 +452,15 @@ def receive_proposal(
     if not change_id:
         change_id = str(uuid4())
 
-    pending_dir = DATA_DIR / "pending_files" / change_id
-    pending_dir.mkdir(parents=True, exist_ok=True)
-    upload_dest = pending_dir / target_path.name
-    with upload_dest.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
+    upload_dest: Path | None = None
+    if action in ("create", "update"):
+        if file is None:
+            raise HTTPException(status_code=400, detail="File upload required for create/update")
+        pending_dir = DATA_DIR / "pending_files" / change_id
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        upload_dest = pending_dir / target_path.name
+        with upload_dest.open("wb") as f:
+            shutil.copyfileobj(file.file, f)
 
     file_id = f"file-{relative_path.replace('/', '-').replace(' ', '_')}"
     change = ProposedChange(
@@ -442,25 +472,25 @@ def receive_proposal(
         payload={
             "relative_path": relative_path,
             "action": action,
-            "uploaded_filename": str(upload_dest),
+            "uploaded_filename": str(upload_dest) if upload_dest else None,
             "target_filename": str(target_path),
             "original_exists": target_path.exists(),
         },
     )
     PendingStore.save_change(change)
 
-    # Mirror to registered file entry for UI consistency
-    entry = FileEntry(
-        id=file_id,
-        name=target_path.name,
-        path=str(target_path),
-        size=upload_dest.stat().st_size,
-        modified=_now(),
-        checksum=_hash_file(upload_dest),
-        tags=[relative_path],
-        source_device=source_name,
-    )
-    FileStore.upsert_file(entry)
+    if upload_dest:
+        entry = FileEntry(
+            id=file_id,
+            name=target_path.name,
+            path=str(target_path),
+            size=upload_dest.stat().st_size,
+            modified=_now(),
+            checksum=_hash_file(upload_dest),
+            tags=[relative_path],
+            source_device=source_name,
+        )
+        FileStore.upsert_file(entry)
 
     return change.model_dump()
 
@@ -476,24 +506,51 @@ def approve_change(change_id: str = Form(...)) -> dict[str, Any]:
 
 
 def _apply_approved_change(change: ProposedChange) -> None:
-    """Copy pending file to master target, snapshot existing file, update index."""
+    """Apply an approved change: copy pending file, delete target, snapshot before changes, update index."""
     payload = change.payload or {}
     target_filename = payload.get("target_filename")
     uploaded_filename = payload.get("uploaded_filename")
     relative_path = payload.get("relative_path") or change.relative_path
 
-    if target_filename and uploaded_filename:
-        target = Path(target_filename)
+    if not target_filename:
+        return
+
+    target = Path(target_filename)
+    if not str(target).startswith(str(SettingsStore.master_folder_path().resolve())):
+        raise ValueError("Access denied")
+
+    file_id = change.file_id
+
+    if change.action == "delete":
+        if target.exists():
+            SnapshotStore.create(file_id, source_path=target, note=f"pre-delete {change.id}")
+            target.unlink()
+            # Remove parent dirs if empty
+            try:
+                target.parent.rmdir()
+            except OSError:
+                pass
+        FileStore.upsert_file(FileEntry(
+            id=file_id,
+            name=target.name,
+            path=str(target),
+            size=0,
+            modified=_now(),
+            checksum=None,
+            tags=[relative_path] if relative_path else [],
+            source_device=change.source_device,
+        ))
+        return
+
+    if uploaded_filename:
         target.parent.mkdir(parents=True, exist_ok=True)
         source = Path(uploaded_filename)
         if source.exists():
-            # Snapshot existing file before overwrite
             if target.exists():
-                SnapshotStore.create(change.file_id, source_path=target, note=f"pre-approve {change.id}")
+                SnapshotStore.create(file_id, source_path=target, note=f"pre-approve {change.id}")
             shutil.copy2(source, target)
-            # Update file entry
             entry = FileEntry(
-                id=change.file_id,
+                id=file_id,
                 name=target.name,
                 path=str(target),
                 size=target.stat().st_size,

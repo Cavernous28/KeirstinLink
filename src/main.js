@@ -104,11 +104,13 @@ function renderPending() {
     const payload = a.payload || {};
     const target = payload.target_filename || payload.relative_path || a.relative_path || 'unknown';
     const targetDisplay = String(target).replace(/\\\\/g, '\\');
+    const actionLabel = a.action ? a.action.toUpperCase() : 'CHANGE';
+    const actionClass = a.action === 'delete' ? 'danger' : (a.action === 'update' ? 'warning' : 'success');
     return `
     <div class="card">
       <div class="card-info">
         <p class="card-title">${escapeHtml(a.file_id || 'Unknown')}</p>
-        <p class="card-meta">${escapeHtml(a.source_device || 'unknown device')} → ${escapeHtml(targetDisplay)}</p>
+        <p class="card-meta"><span class="badge ${actionClass}">${escapeHtml(actionLabel)}</span> ${escapeHtml(a.source_device || 'unknown device')} → ${escapeHtml(targetDisplay)}</p>
         <p class="card-meta">${escapeHtml(a.id)}</p>
       </div>
       <div class="card-actions">
