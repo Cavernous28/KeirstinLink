@@ -2,11 +2,18 @@
 
 import json
 import os
+import sys
 from pathlib import Path
 
 HOST = os.getenv("KL_HOST", "0.0.0.0")
 PORT = int(os.getenv("KL_PORT", "3710"))
-DATA_DIR = Path(os.getenv("KL_DATA_DIR", str(Path(__file__).resolve().parent.parent / "data")))
+
+# Production data directory: per-user local app data, not relative to source tree.
+default_data_dir = Path.home() / "AppData" / "Local" / "KeirstinLink" / "data"
+if sys.platform != "win32":
+    default_data_dir = Path.home() / ".local" / "share" / "KeirstinLink" / "data"
+
+DATA_DIR = Path(os.getenv("KL_DATA_DIR", str(default_data_dir)))
 MAX_VERSIONS = int(os.getenv("KL_MAX_VERSIONS", "3"))
 UDP_DISCOVERY_PORT = int(os.getenv("KL_UDP_PORT", "37100"))
 MDNS_SERVICE_NAME = os.getenv("KL_MDNS_NAME", "KeirstinLink")

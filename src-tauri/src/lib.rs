@@ -138,7 +138,7 @@ fn start_backend() -> Result<Option<Child>, String> {
             "-m".to_string(),
             "keirstin_link.main".to_string(),
             "--host".to_string(),
-            "127.0.0.1".to_string(),
+            "0.0.0.0".to_string(),
             "--port".to_string(),
             "3710".to_string(),
         ];
@@ -148,7 +148,7 @@ fn start_backend() -> Result<Option<Child>, String> {
         program = exe_path.to_string_lossy().to_string();
         args = vec![
             "--host".to_string(),
-            "127.0.0.1".to_string(),
+            "0.0.0.0".to_string(),
             "--port".to_string(),
             "3710".to_string(),
         ];
