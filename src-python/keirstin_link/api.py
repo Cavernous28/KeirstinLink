@@ -96,7 +96,7 @@ def folder_index() -> list[dict[str, Any]]:
 
 
 @app.post("/scan-local")
-def scan_local(
+async def scan_local(
     device_id: str = Form(...),
     remote_index_json: str = Form(""),
 ) -> dict[str, Any]:
@@ -117,10 +117,10 @@ def scan_local(
     else:
         base_url = f"http://{device.host}:{device.port}"
         try:
-            import urllib.request
-            req = urllib.request.Request(f"{base_url}/folder-index")
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                remote_index = json.loads(resp.read().decode("utf-8"))
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{base_url}/folder-index")
+                resp.raise_for_status()
+                remote_index = resp.json()
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Could not fetch folder index from {base_url}: {e}")
 
@@ -272,7 +272,7 @@ def download_file(path: str) -> StreamingResponse:
 
 
 @app.post("/pull")
-def pull_device(device_id: str = Form(...), remote_index_json: str = Form("")) -> dict[str, Any]:
+async def pull_device(device_id: str = Form(...), remote_index_json: str = Form("")) -> dict[str, Any]:
     """Client: pull all missing or changed files from a remote master device.
 
     If `remote_index_json` is provided, use it directly instead of fetching from the device.
@@ -289,10 +289,10 @@ def pull_device(device_id: str = Form(...), remote_index_json: str = Form("")) -
     else:
         base_url = f"http://{device.host}:{device.port}"
         try:
-            import urllib.request
-            req = urllib.request.Request(f"{base_url}/folder-index")
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                remote_index = json.loads(resp.read().decode("utf-8"))
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{base_url}/folder-index")
+                resp.raise_for_status()
+                remote_index = resp.json()
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Could not fetch folder index from {base_url}: {e}")
 
@@ -301,36 +301,35 @@ def pull_device(device_id: str = Form(...), remote_index_json: str = Form("")) -
     pulled = []
     skipped = []
 
-    for remote_entry in remote_index:
-        remote_path = remote_entry["relative_path"]
-        local_root, rel_to_root = _find_sync_root_for_remote(remote_path, roots)
-        if local_root is None:
-            # No configured sync root covers this remote path; skip
-            continue
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for remote_entry in remote_index:
+            remote_path = remote_entry["relative_path"]
+            local_root, rel_to_root = _find_sync_root_for_remote(remote_path, roots)
+            if local_root is None:
+                continue
 
-        local_path = (local_root / rel_to_root).resolve()
-        local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path = (local_root / rel_to_root).resolve()
+            local_path.parent.mkdir(parents=True, exist_ok=True)
 
-        need_download = True
-        if local_path.is_file():
-            local_mtime = datetime.fromtimestamp(local_path.stat().st_mtime, tz=timezone.utc).isoformat()
-            if local_mtime == remote_entry["modified"] and local_path.stat().st_size == remote_entry["size"]:
-                need_download = False
+            need_download = True
+            if local_path.is_file():
+                local_mtime = datetime.fromtimestamp(local_path.stat().st_mtime, tz=timezone.utc).isoformat()
+                if local_mtime == remote_entry["modified"] and local_path.stat().st_size == remote_entry["size"]:
+                    need_download = False
 
-        if need_download:
-            try:
-                safe_rel = remote_path.replace("\\", "/")
-                req = urllib.request.Request(f"{base_url}/files/download?path={urllib.parse.quote(safe_rel)}")
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    local_path.write_bytes(resp.read())
-                # Match mtime to avoid re-downloading next time
-                remote_mtime = datetime.fromisoformat(remote_entry["modified"])
-                os.utime(local_path, (remote_mtime.timestamp(), remote_mtime.timestamp()))
-                pulled.append(remote_path)
-            except Exception as e:
-                raise HTTPException(status_code=502, detail=f"Failed to pull {remote_path}: {e}")
-        else:
-            skipped.append(remote_path)
+            if need_download:
+                try:
+                    safe_rel = remote_path.replace("\\", "/")
+                    resp = await client.get(f"{base_url}/files/download?path={urllib.parse.quote(safe_rel)}")
+                    resp.raise_for_status()
+                    local_path.write_bytes(resp.content)
+                    remote_mtime = datetime.fromisoformat(remote_entry["modified"])
+                    os.utime(local_path, (remote_mtime.timestamp(), remote_mtime.timestamp()))
+                    pulled.append(remote_path)
+                except Exception as e:
+                    raise HTTPException(status_code=502, detail=f"Failed to pull {remote_path}: {e}")
+            else:
+                skipped.append(remote_path)
 
     # Rebuild our local index after pull
     rebuild_files_index()
