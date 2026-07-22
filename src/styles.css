@@ -193,8 +193,8 @@ html, body, #app {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  width: min(480px, 90vw);
-  max-height: 90vh;
+  width: min(720px, 92vw);
+  max-height: 92vh;
   overflow-y: auto;
   box-shadow: var(--shadow);
 }

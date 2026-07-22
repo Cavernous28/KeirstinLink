@@ -304,6 +304,7 @@ async function saveDevice(e) {
   e.preventDefault();
   const rawId = editingDeviceId || $('#device-id').value.trim();
   const name = $('#device-name').value.trim() || 'New Device';
+  const roots = collectSyncRoots();
   const payload = {
     id: rawId || generateDeviceId(name),
     name: name,
@@ -311,16 +312,18 @@ async function saveDevice(e) {
     port: parseInt($('#device-port').value || '3710', 10),
     kind: $('#device-kind').value,
     shared_folders: $('#device-shared-folders').value.trim(),
-    sync_roots_json: JSON.stringify(collectSyncRoots()),
+    sync_roots_json: JSON.stringify(roots),
   };
+  console.log('Saving device payload:', payload);
   try {
     const command = editingDeviceId ? 'update_device' : 'add_device';
-    await invoke(command, { payload });
+    const result = await invoke(command, { payload });
+    console.log('Save device result:', result);
     closeDeviceModal();
     await refresh();
     setStatus(editingDeviceId ? 'Device updated.' : 'Device added.');
   } catch (err) {
-    console.error(err);
+    console.error('Save device error:', err);
     setError('Save device failed: ' + errorMessage(err));
   }
 }
