@@ -12,7 +12,7 @@ from typing import Any, Optional
 from uuid import uuid4
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
@@ -269,8 +269,11 @@ def rebuild_index() -> dict[str, Any]:
 
 
 @app.get("/files/download")
-def download_file(path: str) -> StreamingResponse:
-    """Download a file from the master sync folder by relative path."""
+def download_file(path: str, request: Request) -> Response:
+    """Download a file from the master sync folder by relative path.
+
+    Supports Range requests for chunked/resumable transfers.
+    """
     root = SettingsStore.master_folder_path()
     target = (root / path).resolve()
     # Security: refuse to serve anything outside the sync folder.
@@ -279,14 +282,96 @@ def download_file(path: str) -> StreamingResponse:
     if not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
 
+    file_size = target.stat().st_size
+    range_header = request.headers.get("range")
+
+    if range_header:
+        try:
+            # Expect "bytes=start-end" (inclusive)
+            unit, ranges = range_header.strip().split("=")
+            if unit != "bytes":
+                raise ValueError("Only bytes ranges supported")
+            start_str, end_str = ranges.split("-")
+            start = int(start_str) if start_str else 0
+            end = int(end_str) if end_str else file_size - 1
+            if start >= file_size or end >= file_size or start > end:
+                raise ValueError("Invalid range")
+            length = end - start + 1
+            with target.open("rb") as f:
+                f.seek(start)
+                data = f.read(length)
+            headers = {
+                "Content-Disposition": f"attachment; filename=\"{target.name}\"",
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(length),
+            }
+            return Response(content=data, status_code=206, headers=headers, media_type="application/octet-stream")
+        except Exception:
+            raise HTTPException(status_code=416, detail="Range not satisfiable")
+
     def iter_file():
         with target.open("rb") as f:
             while chunk := f.read(65536):
                 yield chunk
 
-    return StreamingResponse(iter_file(), media_type="application/octet-stream", headers={"Content-Disposition": f"attachment; filename=\"{target.name}\""})
+    return StreamingResponse(
+        iter_file(),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"{target.name}\"",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+        },
+    )
 
 
+
+
+CHUNK_SIZE = 1024 * 1024  # 1 MiB
+
+
+@app.post("/files/upload-chunk")
+def upload_chunk(
+    relative_path: str = Form(...),
+    chunk_index: int = Form(...),
+    total_chunks: int = Form(...),
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    """Receive a single chunk of a file upload. Assemble once all chunks arrive."""
+    master_root = SettingsStore.master_folder_path()
+    target_path = (master_root / relative_path).resolve()
+    if not str(target_path).startswith(str(master_root.resolve())):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    chunk_dir = DATA_DIR / "upload_chunks" / relative_path.replace("/", "-").replace("\\", "-")
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+    chunk_file = chunk_dir / f"chunk-{chunk_index:04d}"
+    with chunk_file.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    received = sorted(chunk_dir.glob("chunk-*"))
+    if len(received) == total_chunks:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with target_path.open("wb") as out:
+            for cf in received:
+                with cf.open("rb") as f:
+                    shutil.copyfileobj(f, out)
+        shutil.rmtree(chunk_dir)
+        return {
+            "relative_path": relative_path,
+            "assembled": True,
+            "size": target_path.stat().st_size,
+            "checksum": _hash_file(target_path),
+        }
+
+    return {
+        "relative_path": relative_path,
+        "assembled": False,
+        "chunk_index": chunk_index,
+        "received": len(received),
+        "total_chunks": total_chunks,
+    }
 @app.post("/pull")
 async def pull_device(device_id: str = Form(...), remote_index_json: str = Form("")) -> dict[str, Any]:
     """Client: pull all missing or changed files from a remote master device.
@@ -336,9 +421,25 @@ async def pull_device(device_id: str = Form(...), remote_index_json: str = Form(
             if need_download:
                 try:
                     safe_rel = remote_path.replace("\\", "/")
-                    resp = await client.get(f"{base_url}/files/download?path={urllib.parse.quote(safe_rel)}")
+                    encoded_path = urllib.parse.quote(safe_rel)
+                    resp = await client.get(f"{base_url}/files/download?path={encoded_path}")
                     resp.raise_for_status()
-                    local_path.write_bytes(resp.content)
+                    total_size = int(resp.headers.get("content-length", str(len(resp.content))))
+
+                    with local_path.open("wb") as out:
+                        out.write(resp.content)
+                        offset = len(resp.content)
+                        while offset < total_size:
+                            end = min(offset + CHUNK_SIZE - 1, total_size - 1)
+                            headers = {"Range": f"bytes={offset}-{end}"}
+                            chunk_resp = await client.get(
+                                f"{base_url}/files/download?path={encoded_path}",
+                                headers=headers,
+                            )
+                            chunk_resp.raise_for_status()
+                            out.write(chunk_resp.content)
+                            offset += len(chunk_resp.content)
+
                     remote_mtime = datetime.fromisoformat(remote_entry["modified"])
                     os.utime(local_path, (remote_mtime.timestamp(), remote_mtime.timestamp()))
                     pulled.append(remote_path)
@@ -357,7 +458,10 @@ async def propose_files(
     device_id: str = Form(...),
     changes_json: str = Form(...),
 ) -> dict[str, Any]:
-    """Client: propose a batch of local file changes to a remote master device."""
+    """Client: propose a batch of local file changes to a remote master device.
+
+    Large create/update proposals are uploaded in chunks to avoid loading whole files into memory.
+    """
     device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -410,14 +514,30 @@ async def propose_files(
                 continue
 
             change_id = str(uuid4())
-            files = {
-                "relative_path": (None, rel_path),
-                "action": (None, action),
-                "source_device": (None, source_device),
-                "change_id": (None, change_id),
-                "file": (local_path.name, local_path.read_bytes(), "application/octet-stream"),
-            }
             try:
+                # Upload file in chunks, then submit the proposal metadata
+                total_size = local_path.stat().st_size
+                total_chunks = max(1, (total_size + CHUNK_SIZE - 1) // CHUNK_SIZE)
+                with local_path.open("rb") as f:
+                    for idx in range(total_chunks):
+                        chunk = f.read(CHUNK_SIZE)
+                        files = {
+                            "relative_path": (None, rel_path),
+                            "chunk_index": (None, str(idx)),
+                            "total_chunks": (None, str(total_chunks)),
+                            "file": (local_path.name, chunk, "application/octet-stream"),
+                        }
+                        resp = await client.post(f"{base_url}/files/upload-chunk", files=files)
+                        resp.raise_for_status()
+
+                files = {
+                    "relative_path": (None, rel_path),
+                    "action": (None, action),
+                    "source_device": (None, source_device),
+                    "change_id": (None, change_id),
+                    "assembled": (None, "true"),
+                    "file": (local_path.name, b"", "application/octet-stream"),
+                }
                 resp = await client.post(f"{base_url}/receive-proposal", files=files)
                 resp.raise_for_status()
                 proposed.append(resp.json())
@@ -433,9 +553,13 @@ def receive_proposal(
     action: str = Form(...),
     source_device: str = Form(""),
     change_id: str = Form(""),
+    assembled: bool = Form(False),
     file: UploadFile = File(None),
 ) -> dict[str, Any]:
-    """Master: receive a single file proposal from a client and queue it for approval."""
+    """Master: receive a single file proposal from a client and queue it for approval.
+
+    For create/update, either upload the full file here or upload chunks first and set assembled=True.
+    """
     master_root = SettingsStore.master_folder_path()
     target_path = (master_root / relative_path).resolve()
 
@@ -455,14 +579,19 @@ def receive_proposal(
     upload_dest: Path | None = None
     proposed_checksum: str | None = None
     if action in ("create", "update"):
-        if file is None:
-            raise HTTPException(status_code=400, detail="File upload required for create/update")
-        pending_dir = DATA_DIR / "pending_files" / change_id
-        pending_dir.mkdir(parents=True, exist_ok=True)
-        upload_dest = pending_dir / target_path.name
-        with upload_dest.open("wb") as f:
-            shutil.copyfileobj(file.file, f)
-        proposed_checksum = _hash_file(upload_dest)
+        if assembled and target_path.exists():
+            # File was pre-assembled via /files/upload-chunk; use it directly
+            upload_dest = target_path
+            proposed_checksum = _hash_file(upload_dest)
+        else:
+            if file is None:
+                raise HTTPException(status_code=400, detail="File upload required for create/update")
+            pending_dir = DATA_DIR / "pending_files" / change_id
+            pending_dir.mkdir(parents=True, exist_ok=True)
+            upload_dest = pending_dir / target_path.name
+            with upload_dest.open("wb") as f:
+                shutil.copyfileobj(file.file, f)
+            proposed_checksum = _hash_file(upload_dest)
 
     file_id = f"file-{relative_path.replace('/', '-').replace(' ', '_')}"
 
@@ -590,9 +719,10 @@ def _apply_approved_change(change: ProposedChange) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         source = Path(uploaded_filename)
         if source.exists():
-            if target.exists():
-                SnapshotStore.create(file_id, source_path=target, note=f"pre-approve {change.id}")
-            shutil.copy2(source, target)
+            if source.resolve() != target.resolve():
+                if target.exists():
+                    SnapshotStore.create(file_id, source_path=target, note=f"pre-approve {change.id}")
+                shutil.copy2(source, target)
             entry = FileEntry(
                 id=file_id,
                 name=target.name,
