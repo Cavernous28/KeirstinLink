@@ -84,6 +84,16 @@ fn start_backend() -> Result<Option<Child>, String> {
         return Ok(None);
     }
 
+    // If a backend is already listening, reuse it instead of failing to bind.
+    if ureq::get(&format!("{}/health", PY_BASE_URL))
+        .timeout(Duration::from_secs(2))
+        .call()
+        .is_ok()
+    {
+        eprintln!("[keirstinlink] backend already running on {}; reusing it", PY_BASE_URL);
+        return Ok(None);
+    }
+
     let python_cmd = if cfg!(windows) { "python" } else { "python3" };
 
     let mut child = Command::new(python_cmd)

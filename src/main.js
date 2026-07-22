@@ -13,13 +13,17 @@ function $$(sel) { return document.querySelectorAll(sel); }
 
 let statusLockedUntil = 0;
 
-function setStatus(msg, lockSeconds = 0) {
+function setStatus(msg, lockSeconds = 2) {
   const now = Date.now();
   if (now < statusLockedUntil) return;
   $('#status').textContent = msg;
-  if (lockSeconds > 0) {
-    statusLockedUntil = now + lockSeconds * 1000;
-  }
+  statusLockedUntil = now + lockSeconds * 1000;
+}
+
+function setStatusQuiet(msg) {
+  const now = Date.now();
+  if (now < statusLockedUntil) return;
+  $('#status').textContent = msg;
 }
 
 function setError(msg) {
@@ -73,7 +77,7 @@ function renderPending() {
   list.innerHTML = state.pending.map(a => {
     const payload = a.payload || {};
     const target = payload.target_filename || payload.relative_path || a.relative_path || 'unknown';
-    const targetDisplay = String(target).replace(/\\/g, '\');
+    const targetDisplay = String(target).replace(/\\\\/g, '\\');
     return `
     <div class="card">
       <div class="card-info">
@@ -97,6 +101,15 @@ function renderFiles() {
     return;
   }
 
+  // Capture currently closed groups before re-rendering
+  const closed = new Set();
+  list.querySelectorAll('.sync-group').forEach(group => {
+    const summary = group.querySelector('.sync-group-header span');
+    if (summary && !group.open) {
+      closed.add(summary.textContent);
+    }
+  });
+
   // Group files by source device
   const groups = {};
   state.files.forEach(f => {
@@ -106,7 +119,7 @@ function renderFiles() {
   });
 
   list.innerHTML = Object.entries(groups).map(([source, files]) => `
-    <details class="sync-group" open>
+    <details class="sync-group" ${closed.has(source) ? '' : 'open'}>
       <summary class="sync-group-header">
         <span>${escapeHtml(source)}</span>
         <span class="badge">${files.length}</span>
@@ -116,7 +129,7 @@ function renderFiles() {
           <div class="card small">
             <div class="card-info">
               <p class="card-title">${escapeHtml(f.name || 'Unknown')}</p>
-              <p class="card-meta">${formatBytes(f.size || 0)} • ${escapeHtml((f.path || '').replace(/\\/g, '\'))}</p>
+              <p class="card-meta">${formatBytes(f.size || 0)} • ${escapeHtml((f.path || '').replace(/\\\\/g, '\\'))}</p>
             </div>
           </div>
         `).join('')}
@@ -175,7 +188,7 @@ async function saveSettings(e) {
     await invoke('save_settings', { payload });
     closeSettings();
     await refresh();
-    setStatus('Settings saved.');
+    setStatus('Settings saved.', 0);
   } catch (err) {
     console.error(err);
     setError('Save settings failed: ' + errorMessage(err));
@@ -194,7 +207,7 @@ async function browseFolder() {
 
 async function openFolder() {
   const path = $('#setting-folder').value.trim();
-  if (!path) return setStatus('No sync folder set');
+  if (!path) return setStatus('No sync folder set', 0);
   try {
     await invoke('open_folder', { path });
   } catch (e) {
@@ -215,7 +228,7 @@ async function browseMasterFolder() {
 
 async function openMasterFolder() {
   const path = $('#setting-master-folder').value.trim();
-  if (!path) return setStatus('No master folder set');
+  if (!path) return setStatus('No master folder set', 0);
   try {
     await invoke('open_folder', { path });
   } catch (e) {
@@ -345,7 +358,7 @@ async function saveDevice(e) {
     console.log('Save device result:', result);
     closeDeviceModal();
     await refresh();
-    setStatus(editingDeviceId ? 'Device updated.' : 'Device added.');
+    setStatus(editingDeviceId ? 'Device updated.' : 'Device added.', 3);
   } catch (err) {
     console.error('Save device error:', err);
     setError('Save device failed: ' + errorMessage(err));
@@ -353,7 +366,7 @@ async function saveDevice(e) {
 }
 
 async function refresh() {
-  setStatus('Refreshing...');
+  setStatusQuiet('Refreshing...');
   try {
     const data = await invoke('get_state');
     state.devices = data.devices || [];
@@ -361,7 +374,7 @@ async function refresh() {
     state.files = data.files || [];
     state.settings = data.settings || {};
     render();
-    setStatus(`Loaded ${state.devices.length} devices, ${state.pending.length} pending, ${state.files.length} files`);
+    setStatusQuiet(`Loaded ${state.devices.length} devices, ${state.pending.length} pending, ${state.files.length} files`);
   } catch (e) {
     console.error(e);
     setError('Refresh failed: ' + errorMessage(e));
@@ -390,9 +403,9 @@ async function approve(id, approved) {
 }
 
 async function approveAll() {
-  if (!state.pending.length) return setStatus('No pending approvals');
+  if (!state.pending.length) return setStatus('No pending approvals', 3);
   if (!confirm(`Approve all ${state.pending.length} pending file(s)?`)) return;
-  setStatus(`Approving ${state.pending.length} change(s)...`);
+  setStatus(`Approving ${state.pending.length} change(s)...`, 0);
   try {
     const result = await invoke('approve_device', { payload: { id: '__all__', approved: true } });
     await refresh();
@@ -401,7 +414,7 @@ async function approveAll() {
     if (failed.length) {
       setError(`Approved ${count}, failed ${failed.length}`);
     } else {
-      setStatus(`✨ Approved ${count} change(s)`);
+      setStatus(`✨ Approved ${count} change(s)`, 3);
     }
   } catch (e) {
     console.error(e);
@@ -410,7 +423,7 @@ async function approveAll() {
 }
 
 async function syncDevice(id) {
-  setStatus(`Syncing device ${id}...`);
+  setStatus(`Syncing device ${id}...`, 0);
   try {
     const result = await invoke('sync_device', { payload: { id } });
     await refresh();
@@ -418,11 +431,11 @@ async function syncDevice(id) {
     const skipped = result.skipped || [];
     const count = pulled.length;
     if (count > 0) {
-      setStatus(`✨ Sync complete: pulled ${count} file(s)`);
+      setStatus(`✨ Sync complete: pulled ${count} file(s)`, 3);
     } else if (skipped.length > 0) {
-      setStatus(`Sync complete: ${skipped.length} file(s) already up to date`);
+      setStatus(`Sync complete: ${skipped.length} file(s) already up to date`, 3);
     } else {
-      setStatus('Sync complete: no files found');
+      setStatus('Sync complete: no files found', 3);
     }
   } catch (e) {
     console.error(e);
@@ -431,15 +444,15 @@ async function syncDevice(id) {
 }
 
 async function proposeDevice(id) {
-  setStatus(`Scanning + proposing changes for ${id}...`);
+  setStatus(`Scanning + proposing changes for ${id}...`, 0);
   try {
     const result = await invoke('propose_device', { payload: { id } });
     await refresh();
     const count = result.count || 0;
     if (count > 0) {
-      setStatus(`✨ Proposed ${count} change(s) for approval`);
+      setStatus(`✨ Proposed ${count} change(s) for approval`, 3);
     } else {
-      setStatus('No changes to propose');
+      setStatus('No changes to propose', 3);
     }
   } catch (e) {
     console.error(e);
