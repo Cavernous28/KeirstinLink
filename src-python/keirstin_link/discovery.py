@@ -14,6 +14,22 @@ from .store import DeviceStore
 BROADCAST_INTERVAL = 5.0
 UDP_BUFFER = 4096
 
+# Peers seen on the LAN but not yet added to the user's device list.
+_discovered_peers: dict[str, dict] = {}
+_discovery_lock = threading.Lock()
+
+
+def get_discovered_peers() -> list[dict]:
+    """Return recently discovered peers, newest first."""
+    cutoff = datetime.now(timezone.utc).timestamp() - 60  # 1 minute stale
+    with _discovery_lock:
+        fresh = [
+            {**info, "last_seen": info["last_seen"].isoformat()}
+            for info in _discovered_peers.values()
+            if info["last_seen"].timestamp() > cutoff
+        ]
+    return sorted(fresh, key=lambda d: d["last_seen"], reverse=True)
+
 
 class DiscoveryService:
     def __init__(self, device_name: str = MDNS_SERVICE_NAME, port: int = PORT):
@@ -68,15 +84,16 @@ class DiscoveryService:
                 payload = json.loads(data.decode("utf-8"))
                 if payload.get("id") == self._own_beacon()["id"]:
                     continue
-                device = DeviceInfo(
-                    id=payload["id"],
-                    name=payload.get("name", "unknown"),
-                    host=addr[0],
-                    port=int(payload.get("port", self.port)),
-                    last_seen=datetime.now(timezone.utc),
-                    capabilities=payload.get("capabilities", []),
-                )
-                DeviceStore.upsert_device(device)
+                peer = {
+                    "id": payload["id"],
+                    "name": payload.get("name", "unknown"),
+                    "host": addr[0],
+                    "port": int(payload.get("port", self.port)),
+                    "last_seen": datetime.now(timezone.utc),
+                    "capabilities": payload.get("capabilities", []),
+                }
+                with _discovery_lock:
+                    _discovered_peers[peer["id"]] = peer
             except Exception as exc:
                 print(f"[discovery] bad beacon from {addr}: {exc}")
         sock.close()

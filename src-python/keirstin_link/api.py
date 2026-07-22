@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from .config import DATA_DIR, MAX_VERSIONS, PORT
+from .discovery import get_discovered_peers
 from .folder_index import index_sync_folder, rebuild_files_index
 from .models import ChangeStatus, DeviceInfo, FileEntry, ProposedChange, SyncRoot
 from .settings_store import Settings, SettingsStore
@@ -51,7 +52,14 @@ def get_state() -> dict[str, Any]:
         "pending": [c.model_dump() for c in PendingStore.list_changes(status=ChangeStatus.PENDING)],
         "files": [f.model_dump() for f in FileStore.list_files()],
         "settings": settings.model_dump(),
+        "discovered": get_discovered_peers(),
     }
+
+
+@app.get("/discovered")
+def list_discovered() -> dict[str, Any]:
+    """Return recently discovered LAN peers."""
+    return {"discovered": get_discovered_peers()}
 
 
 @app.get("/settings")

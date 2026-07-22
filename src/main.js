@@ -4,6 +4,7 @@ const state = {
   devices: [],
   pending: [],
   files: [],
+  discovered: [],
   settings: {},
   activeTab: 'sync'
 };
@@ -38,6 +39,7 @@ function errorMessage(e) {
 
 function render() {
   renderDevices();
+  renderDiscovered();
   renderPending();
   renderFiles();
 }
@@ -66,6 +68,30 @@ function renderDevices() {
     </div>
   `).join('');
 }
+
+function renderDiscovered() {
+  const list = $('#discovered-list');
+  const tabCount = $('#discovered-tab-count');
+  if (tabCount) tabCount.textContent = state.discovered.length;
+  if (!list) return;
+  $('#discovered-count').textContent = state.discovered.length;
+  if (state.discovered.length === 0) {
+    list.innerHTML = '<p class="empty">No LAN devices discovered yet. Make sure another KeirstinLink device is on the same network.</p>';
+    return;
+  }
+  list.innerHTML = state.discovered.map(d => `
+    <div class="card">
+      <div class="card-info">
+        <p class="card-title">${escapeHtml(d.name || 'Unknown')}</p>
+        <p class="card-meta">${escapeHtml(d.host || 'unknown')}:${d.port || 0} • ${escapeHtml((d.capabilities || []).join(', ') || 'device')}</p>
+      </div>
+      <div class="card-actions">
+        <button class="btn success" data-action="add-discovered" data-host="${d.host}" data-port="${d.port || 3710}" data-name="${escapeHtml(d.name || 'Unknown')}">Add</button>
+      </div>
+    </div>
+  `).join('');
+}
+
 
 function renderPending() {
   const list = $('#approval-list');
@@ -369,17 +395,27 @@ async function refresh() {
   setStatusQuiet('Refreshing...');
   try {
     const data = await invoke('get_state');
+    const before = JSON.stringify(state);
     state.devices = data.devices || [];
     state.pending = data.pending || [];
     state.files = data.files || [];
     state.settings = data.settings || {};
-    render();
+    state.discovered = data.discovered || [];
+    const after = JSON.stringify({
+      devices: state.devices,
+      pending: state.pending,
+      files: state.files,
+      discovered: state.discovered,
+    });
+    if (after !== before) {
+      render();
+    }
     setStatusQuiet(`Loaded ${state.devices.length} devices, ${state.pending.length} pending, ${state.files.length} files`);
   } catch (e) {
     console.error(e);
     setError('Refresh failed: ' + errorMessage(e));
   }
-}
+  }
 
 async function removeDevice(id) {
   if (!confirm('Remove this device?')) return;
@@ -443,6 +479,26 @@ async function syncDevice(id) {
   }
 }
 
+async function addDiscoveredDevice(name, host, port) {
+  try {
+    const payload = {
+      id: generateDeviceId(name),
+      name: name,
+      host: host,
+      port: port,
+      kind: 'mobile',
+      shared_folders: '',
+      sync_roots_json: JSON.stringify([]),
+    };
+    await invoke('add_device', { payload });
+    await refresh();
+    setStatus('Discovered device added', 3);
+  } catch (e) {
+    console.error(e);
+    setError('Add discovered device failed: ' + errorMessage(e));
+  }
+}
+
 async function proposeDevice(id) {
   setStatus(`Scanning + proposing changes for ${id}...`, 0);
   try {
@@ -488,6 +544,7 @@ function init() {
     else if (action === 'edit-device') openEditDevice(id);
     else if (action === 'sync') syncDevice(id);
     else if (action === 'propose') proposeDevice(id);
+    else if (action === 'add-discovered') addDiscoveredDevice(btn.dataset.name, btn.dataset.host, parseInt(btn.dataset.port || '3710', 10));
   });
 
   $('#device-form').addEventListener('click', e => {

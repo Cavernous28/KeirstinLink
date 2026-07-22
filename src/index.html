@@ -21,6 +21,11 @@
       </header>
 
       <main class="content">
+        <nav class="tabs">
+          <button class="tab active" data-tab="sync">Sync</button>
+          <button class="tab" data-tab="discovered">Discovered <span id="discovered-tab-count" class="badge">0</span></button>
+        </nav>
+
         <section id="sync" class="tab-panel active">
           <div class="panel-header">
             <h2>Devices</h2>
@@ -47,6 +52,17 @@
           </div>
           <div id="file-list" class="card-list">
             <p class="empty">No synced files yet.</p>
+          </div>
+        </section>
+
+        <section id="discovered" class="tab-panel">
+          <div class="panel-header">
+            <h2>Discovered Devices</h2>
+            <span id="discovered-count" class="badge">0</span>
+          </div>
+          <p class="hint">These KeirstinLink devices were seen on your local network. Add one to start syncing.</p>
+          <div id="discovered-list" class="card-list">
+            <p class="empty">No LAN devices discovered yet.</p>
           </div>
         </section>
       </main>

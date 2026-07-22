@@ -13,6 +13,7 @@ struct UiState {
     devices: Vec<serde_json::Value>,
     pending: Vec<serde_json::Value>,
     files: Vec<serde_json::Value>,
+    discovered: Vec<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -103,7 +104,6 @@ fn start_backend() -> Result<Option<Child>, String> {
         .arg("127.0.0.1")
         .arg("--port")
         .arg("3710")
-        .arg("--no-discovery")
         .current_dir(&dir)
         .spawn()
         .map_err(|e| format!("failed to spawn Python backend: {}", e))?;
@@ -166,7 +166,8 @@ fn get_state() -> Result<UiState, String> {
     let devices = data.get("devices").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     let pending = data.get("pending").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     let files = data.get("files").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    Ok(UiState { devices, pending, files })
+    let discovered = data.get("discovered").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    Ok(UiState { devices, pending, files, discovered })
 }
 
 #[tauri::command]
