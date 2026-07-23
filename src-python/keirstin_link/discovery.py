@@ -14,6 +14,40 @@ from .store import DeviceStore
 BROADCAST_INTERVAL = 5.0
 UDP_BUFFER = 4096
 
+
+def _detect_local_ip() -> str:
+    """Return a routable LAN IP address for this machine.
+
+    HOST is usually '0.0.0.0' so the HTTP backend listens on all interfaces,
+    but discovery beacons must advertise a real address peers can connect to.
+    """
+    if HOST and HOST not in {"0.0.0.0", "127.0.0.1", "localhost", "::"}:
+        return HOST
+    try:
+        # UDP connect to a public address without sending data. The kernel picks
+        # the best local route and we read the bound IP. Works even if the target
+        # is unreachable because no packets are actually sent for a connect().
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(1.0)
+        s.connect(("8.8.8.8", 80))
+        addr = s.getsockname()[0]
+        s.close()
+        if addr and not addr.startswith("127."):
+            return addr
+    except Exception:
+        pass
+    # Fallback: try to find any non-loopback IPv4 interface address.
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            addr = info[4][0]
+            if addr and not addr.startswith("127."):
+                return addr
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+
 # Peers seen on the LAN but not yet added to the user's device list.
 _discovered_peers: dict[str, dict] = {}
 _discovery_lock = threading.Lock()
@@ -35,6 +69,7 @@ class DiscoveryService:
     def __init__(self, device_name: str = MDNS_SERVICE_NAME, port: int = PORT):
         self.device_name = device_name
         self.port = port
+        self._advertised_host = _detect_local_ip()
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self._mdns: object | None = None
@@ -43,7 +78,7 @@ class DiscoveryService:
         return {
             "id": f"{self.device_name}-{self.port}",
             "name": self.device_name,
-            "host": HOST,
+            "host": self._advertised_host,
             "port": self.port,
             "capabilities": ["files", "sync", "propose"],
         }
@@ -118,12 +153,13 @@ class DiscoveryService:
             print("[discovery] zeroconf not installed; skipping mDNS")
             return
         try:
+            host = self._advertised_host
             info = ServiceInfo(
                 type_=MDNS_SERVICE_TYPE,
                 name=f"{self.device_name}.{MDNS_SERVICE_TYPE}",
-                addresses=[socket.inet_aton(HOST)] if HOST != "0.0.0.0" else [],
+                addresses=[socket.inet_aton(host)] if host not in {"0.0.0.0", "127.0.0.1", "localhost"} else [],
                 port=self.port,
-                properties={"path": "/", "version": "0.1.0"},
+                properties={"path": "/", "version": "0.1.1"},
             )
             self._mdns = Zeroconf()
             self._mdns.register_service(info)
