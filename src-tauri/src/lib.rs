@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::Manager;
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, RunEvent, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
 
 #[cfg(windows)]
@@ -55,7 +57,6 @@ struct PairPayload {
     token: String,
 }
 
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ConnectRemotePayload {
     host: String,
@@ -80,6 +81,66 @@ fn project_root() -> std::path::PathBuf {
 
 fn py_backend_dir() -> std::path::PathBuf {
     project_root().join("src-python")
+}
+
+/// Return the data directory used by the Python backend.
+/// Mirrors the logic in `keirstin_link.config`.
+fn data_dir() -> std::path::PathBuf {
+    if let Ok(v) = std::env::var("KL_DATA_DIR") {
+        return std::path::PathBuf::from(v);
+    }
+    #[cfg(windows)]
+    {
+        let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| {
+            std::env::var("USERPROFILE").unwrap_or_else(|_| String::from("."))
+        });
+        std::path::PathBuf::from(local_app_data)
+            .join("KeirstinLink")
+            .join("data")
+    }
+    #[cfg(not(windows))]
+    {
+        let home = std::env::var("HOME").unwrap_or_else(|_| String::from("."));
+        std::path::PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("KeirstinLink")
+            .join("data")
+    }
+}
+
+fn pid_file() -> std::path::PathBuf {
+    data_dir().join("keirstinlink.pid")
+}
+
+/// Read the PID file and, if the process is still alive, terminate it.
+/// This prevents duplicate backends when the user restarts the app.
+fn kill_existing_backend() {
+    let pid_path = pid_file();
+    if !pid_path.exists() {
+        return;
+    }
+    let pid = match std::fs::read_to_string(&pid_path).ok().and_then(|s| s.trim().parse::<u32>().ok()) {
+        Some(p) => p,
+        None => return,
+    };
+    println!("[keirstinlink] terminating previous backend PID {}", pid);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .and_then(|mut c| c.wait());
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new("kill").args(["-9", &pid.to_string()]).spawn().and_then(|mut c| c.wait());
+    }
+    // Give the OS a moment to release the socket.
+    std::thread::sleep(Duration::from_millis(500));
+    let _ = std::fs::remove_file(&pid_path);
 }
 
 fn wait_for_backend(deadline: Instant) -> Result<(), String> {
@@ -118,15 +179,9 @@ fn bundled_backend_exe() -> Option<std::path::PathBuf> {
 }
 
 fn start_backend() -> Result<Option<Child>, String> {
-    // If a backend is already listening, reuse it instead of failing to bind.
-    if ureq::get(&format!("{}/health", PY_BASE_URL))
-        .timeout(Duration::from_secs(2))
-        .call()
-        .is_ok()
-    {
-        eprintln!("[keirstinlink] backend already running on {}; reusing it", PY_BASE_URL);
-        return Ok(None);
-    }
+    // Ensure only one backend instance exists. If a previous app left one
+    // running, terminate it before starting a fresh backend owned by this app.
+    kill_existing_backend();
 
     let (program, args, cwd): (String, Vec<String>, Option<std::path::PathBuf>);
     let dir = py_backend_dir();
@@ -180,6 +235,15 @@ fn start_backend() -> Result<Option<Child>, String> {
         Err(e) => {
             let _ = child.kill();
             Err(e)
+        }
+    }
+}
+
+fn kill_backend(state: &BackendState) {
+    if let Ok(mut guard) = state.child.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            let _ = child.wait();
         }
     }
 }
@@ -410,12 +474,14 @@ fn sync_remote(payload: ByIdPayload) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(BackendState { child: Mutex::new(None) })
         .setup(|app| {
             let handle = app.app_handle().clone();
+
+            // Start backend in a background thread so the UI window opens quickly.
             std::thread::spawn(move || {
                 match start_backend() {
                     Ok(Some(child)) => {
@@ -433,6 +499,62 @@ pub fn run() {
                     }
                 }
             });
+
+            // Tray icon + menu
+            let show_i = MenuItemBuilder::with_id("show", "Show KeirstinLink").build(app)?;
+            let quit_i = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+            let menu = MenuBuilder::new(app).items(&[&show_i, &quit_i]).build()?;
+
+            let tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().cloned().unwrap_or_else(|| tauri::image::Image::new(include_bytes!("../icons/32x32.png"), 32, 32)))
+                .tooltip("KeirstinLink")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "quit" => {
+                        if let Some(state) = app.try_state::<BackendState>() {
+                            kill_backend(&state);
+                        }
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Left,
+                        button_state: tauri::tray::MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
+            // Window close hides to tray instead of exiting.
+            if let Some(window) = app.get_webview_window("main") {
+                let win_clone = window.clone();
+                window.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        let _ = win_clone.hide();
+                        api.prevent_close();
+                    }
+                });
+            }
+
+            // Keep tray reference alive for the lifetime of the app.
+            app.manage(tray);
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -454,6 +576,14 @@ pub fn run() {
             disconnect_remote,
             sync_remote
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if let RunEvent::ExitRequested { .. } = event {
+            if let Some(state) = app_handle.try_state::<BackendState>() {
+                kill_backend(&state);
+            }
+        }
+    });
 }

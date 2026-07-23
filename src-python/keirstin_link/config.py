@@ -27,6 +27,7 @@ SNAPSHOTS_DIR = DATA_DIR / "snapshots"
 DEVICE_REGISTRY = DATA_DIR / "devices.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 TOKEN_FILE = DATA_DIR / "device_token.json"
+PID_FILE = DATA_DIR / "keirstinlink.pid"
 
 PENDING_DIR.mkdir(parents=True, exist_ok=True)
 SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
