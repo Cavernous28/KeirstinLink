@@ -6,7 +6,7 @@ import sys
 
 import uvicorn
 
-from .api import app
+from .api import app, set_discovery_service
 from .config import HOST, PORT
 from .discovery import DiscoveryService
 
