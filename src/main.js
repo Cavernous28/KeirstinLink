@@ -38,10 +38,57 @@ function errorMessage(e) {
 }
 
 function render() {
+  renderDiscoveryStatus();
+  renderNearby();
   renderDevices();
   renderDiscovered();
   renderPending();
   renderFiles();
+}
+
+function renderDiscoveryStatus() {
+  const indicator = $('#discovery-indicator');
+  const text = $('#discovery-text');
+  const lastSeen = $('#discovery-lastseen');
+  const count = state.discovered.length;
+  indicator.className = 'status-dot online';
+  text.textContent = `Discovery: listening on LAN`;
+  if (count > 0) {
+    lastSeen.textContent = `${count} nearby device${count === 1 ? '' : 's'} seen`;
+  } else {
+    lastSeen.textContent = 'No nearby devices yet';
+  }
+}
+
+function renderNearby() {
+  const list = $('#nearby-list');
+  const countBadge = $('#nearby-count');
+  if (!list) return;
+  countBadge.textContent = state.discovered.length;
+  if (state.discovered.length === 0) {
+    list.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state-icon">📡</div>
+        <p>No KeirstinLink devices found on your network yet.</p>
+        <p class="hint">Make sure another device is running KeirstinLink on the same Wi-Fi or LAN.</p>
+      </div>`;
+    return;
+  }
+  // Hide devices already in the device list
+  const knownIds = new Set((state.devices || []).map(d => `${d.host}:${d.port}`));
+  const nearby = state.discovered.filter(d => !knownIds.has(`${d.host}:${d.port}`));
+  countBadge.textContent = nearby.length;
+  list.innerHTML = nearby.map(d => `
+    <div class="card">
+      <div class="card-info">
+        <p class="card-title">${escapeHtml(d.name || 'Unknown')}</p>
+        <p class="card-meta">${escapeHtml(d.host || 'unknown')}:${d.port || 0} • ${escapeHtml((d.capabilities || []).join(', ') || 'device')}</p>
+      </div>
+      <div class="card-actions">
+        <button class="btn success" data-action="add-discovered" data-host="${d.host}" data-port="${d.port || 3710}" data-name="${escapeHtml(d.name || 'Unknown')}">Add</button>
+      </div>
+    </div>
+  `).join('');
 }
 
 function renderDevices() {

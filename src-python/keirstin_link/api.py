@@ -18,11 +18,33 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from .config import DATA_DIR, DEVICE_TOKEN, MAX_VERSIONS, PORT
-from .discovery import get_discovered_peers
+from .discovery import DiscoveryService, get_discovered_peers
 from .folder_index import index_sync_folder, rebuild_files_index
 from .models import ChangeStatus, DeviceInfo, FileEntry, ProposedChange, SyncRoot
 from .settings_store import Settings, SettingsStore
 from .store import DeviceStore, FileStore, PendingStore, SnapshotStore
+
+# Shared discovery service instance, managed by main.py. Settings reloads can restart it.
+_discovery_service: DiscoveryService | None = None
+
+
+def set_discovery_service(service: DiscoveryService | None) -> None:
+    global _discovery_service
+    _discovery_service = service
+
+
+def restart_discovery() -> dict[str, Any]:
+    """Restart the discovery service with current settings.
+
+    Called after settings change so the advertised device name stays in sync.
+    """
+    global _discovery_service
+    if _discovery_service is None:
+        return {"restarted": False, "reason": "discovery service not running"}
+    _discovery_service.stop()
+    _discovery_service = DiscoveryService(port=PORT)
+    _discovery_service.start()
+    return {"restarted": True, "device_name": SettingsStore.load().device_name, "port": PORT}
 
 app = FastAPI(title="KeirstinLink", version="0.1.0")
 
@@ -110,9 +132,12 @@ def save_settings(
     mode: str = Form("master"),
     sync_folder: str = Form(""),
     master_sync_folder: str = Form(""),
+    restart_discovery_flag: str = Form("true"),
 ) -> dict[str, Any]:
     settings = SettingsStore.load()
+    name_changed = False
     if device_name:
+        name_changed = settings.device_name != device_name
         settings.device_name = device_name
     if mode in ("master", "client"):
         settings.mode = mode
@@ -123,7 +148,15 @@ def save_settings(
         settings.master_sync_folder = master_sync_folder
         Path(master_sync_folder).mkdir(parents=True, exist_ok=True)
     SettingsStore.save(settings)
-    return settings.model_dump()
+    result = settings.model_dump()
+    if name_changed and restart_discovery_flag.lower() not in {"false", "0", "no"}:
+        result["discovery"] = restart_discovery()
+    return result
+
+
+@app.post("/discovery/restart")
+def discovery_restart() -> dict[str, Any]:
+    return restart_discovery()
 
 
 def _hash_file(path: Path, block_size: int = 65536) -> str:

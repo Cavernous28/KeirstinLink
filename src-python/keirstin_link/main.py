@@ -21,8 +21,10 @@ def main() -> None:
     discovery = DiscoveryService(port=args.port)
     if not args.no_discovery:
         discovery.start()
+        set_discovery_service(discovery)
 
     def shutdown(signum, frame) -> None:
+        set_discovery_service(None)
         discovery.stop()
         sys.exit(0)
 

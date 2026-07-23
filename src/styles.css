@@ -10,6 +10,7 @@
   --danger: #f87171;
   --success: #34d399;
   --warning: #fbbf24;
+  --primary: #60a5fa;
   --radius: 8px;
   --shadow: 0 2px 8px rgba(0,0,0,0.25);
 }
@@ -47,6 +48,45 @@ html, body, #app {
 .brand h1 { margin: 0; font-size: 1.25rem; letter-spacing: -0.02em; }
 
 .header-actions { display: flex; gap: 8px; }
+
+.discovery-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  margin: 0 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  color: var(--text-dim);
+}
+.discovery-status .status-dot { background: var(--success); }
+.discovery-status.idle .status-dot { background: var(--warning); }
+.discovery-status.error .status-dot { background: var(--danger); }
+.discovery-status .hint { margin-left: auto; }
+
+#nearby-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 20px;
+}
+#nearby-panel .hint { margin-top: 0; }
+#nearby-panel .card { padding: 10px 12px; }
+#nearby-panel .card-title { font-size: 0.95rem; }
+#nearby-panel .card-meta { font-size: 0.8rem; }
+
+.empty-state {
+  text-align: center;
+  color: var(--text-dim);
+  padding: 24px 12px;
+}
+.empty-state-icon {
+  font-size: 2rem;
+  margin-bottom: 8px;
+}
 
 .btn {
   background: var(--panel-2);
