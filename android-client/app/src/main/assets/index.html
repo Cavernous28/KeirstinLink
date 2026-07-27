@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KeirstinLink</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="app-header">
+        <div class="brand">
+          <img src="assets/tauri.svg" alt="KeirstinLink" />
+          <h1>KeirstinLink</h1>
+        </div>
+        <div class="header-actions">
+          <button id="btn-refresh" class="btn">Refresh</button>
+          <button id="btn-add-device" class="btn">+ Add Device</button>
+          <button id="btn-settings" class="btn primary">Settings</button>
+        </div>
+      </header>
+
+      <main class="content">
+        <div class="discovery-status">
+          <span id="discovery-indicator" class="status-dot"></span>
+          <span id="discovery-text">Discovery: listening…</span>
+          <span id="discovery-lastseen" class="hint"></span>
+        </div>
+
+        <nav class="tabs">
+          <button class="tab active" data-tab="sync">Sync</button>
+          <button class="tab" data-tab="discovered">Discovered <span id="discovered-tab-count" class="badge">0</span></button>
+        </nav>
+
+        <section id="sync" class="tab-panel active">
+          <div id="nearby-panel" class="panel">
+            <div class="panel-header">
+              <h2>Nearby Devices</h2>
+              <span id="nearby-count" class="badge">0</span>
+            </div>
+            <p class="hint">KeirstinLink devices found on your local network. Add one to start syncing.</p>
+            <div id="nearby-list" class="card-list compact">
+              <p class="empty">Scanning your network…</p>
+            </div>
+          </div>
+
+          <div class="panel-header">
+            <h2>Devices</h2>
+            <span id="device-count" class="badge">0</span>
+          </div>
+          <div id="device-list" class="card-list">
+            <p class="empty">No devices yet. Click + Add Device to pair one.</p>
+          </div>
+
+          <div class="panel-header">
+            <h2>Pending Approvals</h2>
+            <div class="header-actions">
+              <span id="approval-count" class="badge">0</span>
+              <button id="btn-approve-all" class="btn success">Approve All</button>
+            </div>
+          </div>
+          <div id="approval-list" class="card-list">
+            <p class="empty">No pending approvals.</p>
+          </div>
+
+          <div class="panel-header">
+            <h2>Synced Files</h2>
+            <span id="file-count" class="badge">0</span>
+          </div>
+          <div id="file-list" class="card-list">
+            <p class="empty">No synced files yet.</p>
+          </div>
+        </section>
+
+        <section id="discovered" class="tab-panel">
+          <div class="panel-header">
+            <h2>Discovered Devices</h2>
+            <span id="discovered-count" class="badge">0</span>
+          </div>
+          <p class="hint">These KeirstinLink devices were seen on your local network. Add one to start syncing.</p>
+          <div class="manual-discovery">
+            <input type="text" id="manual-ip" placeholder="IP address (e.g. 192.168.1.42)" />
+            <input type="number" id="manual-port" value="3710" />
+            <button id="btn-add-by-ip" class="btn">Add by IP</button>
+          </div>
+          <button id="btn-restart-discovery" class="btn">🔄 Restart discovery</button>
+          <div id="discovered-list" class="card-list">
+            <p class="empty">No LAN devices discovered yet.</p>
+          </div>
+        </section>
+      </main>
+
+      <footer class="app-footer">
+        <span id="status">Ready</span>
+      </footer>
+
+      <!-- Settings modal -->
+      <div id="settings-modal" class="modal">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2>Settings</h2>
+            <button id="btn-close-settings" class="btn icon">×</button>
+          </div>
+          <form id="settings-form">
+            <label>
+              <span>Device name</span>
+              <input type="text" id="setting-device-name" placeholder="My PC" />
+            </label>
+
+            <label>
+              <span>Mode</span>
+              <select id="setting-mode">
+                <option value="master">Master (source of truth)</option>
+                <option value="client">Client (pull from master)</option>
+              </select>
+            </label>
+
+            <label>
+              <span>Sync folder</span>
+              <input type="text" id="setting-folder" placeholder="C:\\Users\\cbaxt\\KeirstinLinkSync" />
+              <button type="button" id="btn-browse-folder" class="btn">Browse...</button>
+              <button type="button" id="btn-open-folder" class="btn">Open</button>
+            </label>
+
+            <label>
+              <span>Master sync folder</span>
+              <input type="text" id="setting-master-folder" placeholder="C:\\Users\\cbaxt\\KeirstinLinkMaster" />
+              <button type="button" id="btn-browse-master-folder" class="btn">Browse...</button>
+              <button type="button" id="btn-open-master-folder" class="btn">Open</button>
+            </label>
+
+            <div class="modal-actions">
+              <button type="submit" class="btn primary">Save</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Device modal -->
+      <div id="device-modal" class="modal">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2 id="device-modal-title">Add Device</h2>
+            <button id="btn-close-device" class="btn icon">×</button>
+          </div>
+          <form id="device-form">
+            <input type="hidden" id="device-id" />
+
+            <label>
+              <span>Name *</span>
+              <input type="text" id="device-name" placeholder="e.g. My Phone" required />
+            </label>
+
+            <label>
+              <span>Host</span>
+              <input type="text" id="device-host" placeholder="127.0.0.1" />
+            </label>
+
+            <label>
+              <span>Port</span>
+              <input type="number" id="device-port" value="3710" />
+            </label>
+
+            <label>
+              <span>Kind</span>
+              <select id="device-kind">
+                <option value="mobile">Mobile</option>
+                <option value="desktop">Desktop</option>
+                <option value="handheld">Handheld</option>
+                <option value="laptop">Laptop</option>
+              </select>
+            </label>
+
+            <label>
+              <span>Shared folders (legacy; leave blank for all)</span>
+              <input type="text" id="device-shared-folders" placeholder="e.g. obsidian, shared/photos" />
+            </label>
+
+            <label>
+              <span>Sync roots — map local folders to master prefixes</span>
+            </label>
+            <div id="sync-roots-list" class="sync-roots-list">
+              <!-- rows injected by JS -->
+            </div>
+            <button type="button" id="btn-add-sync-root" class="btn">+ Add sync root</button>
+
+            <p class="hint">* Name is required. Sync roots let you sync folders in-place instead of copying them into the sync folder.</p>
+
+            <div class="modal-actions">
+              <button type="submit" class="btn primary">Save</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="main.js"></script>
+  </body>
+</html>

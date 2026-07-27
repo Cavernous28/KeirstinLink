@@ -1,0 +1,3 @@
+#!/bin/sh
+# Gradle wrapper stub for POSIX; Android Studio or gradle recommended.
+exec sh "$(dirname "$0")/gradlew" "$@"
