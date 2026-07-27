@@ -80,13 +80,25 @@ public class MainActivity extends AppCompatActivity {
         settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
+        settings.setAllowUniversalAccessFromFileURLs(true);
+        settings.setAllowFileAccessFromFileURLs(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            settings.setSafeBrowsingEnabled(false);
+        }
 
         WebViewAssetLoader assetLoader = new WebViewAssetLoader.Builder()
                 .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
                 .build();
 
         webView.setWebViewClient(new LocalContentWebViewClient(assetLoader));
+        webView.setWebChromeClient(new android.webkit.WebChromeClient() {
+            @Override
+            public boolean onConsoleMessage(android.webkit.ConsoleMessage cm) {
+                android.util.Log.d("KeirstinLinkJS", cm.message() + " -- From line " + cm.lineNumber() + " of " + cm.sourceId());
+                return true;
+            }
+        });
         webView.addJavascriptInterface(new AndroidBridge(), "AndroidBridge");
 
         // Load bundled frontend from app assets

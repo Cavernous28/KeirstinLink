@@ -196,12 +196,17 @@ function errorMessage(e) {
 }
 
 function render() {
-  renderDiscoveryStatus();
-  renderNearby();
-  renderDevices();
-  renderDiscovered();
-  renderPending();
-  renderFiles();
+  try {
+    renderDiscoveryStatus();
+    renderNearby();
+    renderDevices();
+    renderDiscovered();
+    renderPending();
+    renderFiles();
+  } catch (e) {
+    console.error('[render] error', e);
+    setError('UI render error: ' + errorMessage(e));
+  }
 }
 
 function renderDiscoveryStatus() {
@@ -847,6 +852,8 @@ function init() {
       if (androidHost) {
         setBackend(androidHost, androidPort);
         console.log('[init] Android backend host', androidHost, androidPort);
+      } else {
+        setError('Tap Connect and enter PC IP:port');
       }
     }
   } catch (e) {
