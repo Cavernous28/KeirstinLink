@@ -119,11 +119,16 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         final String jsHost = escapeJs(backendHost);
-        String url = "http://" + backendHost + ":" + backendPort + "/health";
+        final int jsPort = backendPort;
         webView.evaluateJavascript(
-                "(function(){ if(window.KeirstinLinkBackend){ window.KeirstinLinkBackend.connect('" + jsHost + "', " + backendPort + "); return 'ok';} return 'no backend object'; })()",
-                null);
-        Toast.makeText(this, "Connecting to " + backendHost + ":" + backendPort, Toast.LENGTH_SHORT).show();
+                "(function(){ if(window.KeirstinLinkBackend){ window.KeirstinLinkBackend.connect('" + jsHost + "', " + jsPort + "); return 'ok';} return 'no backend object'; })()",
+                value -> {
+                    if ("ok".equals(value) || "\"ok\"".equals(value)) {
+                        Toast.makeText(MainActivity.this, "Backend set to " + backendHost + ":" + backendPort, Toast.LENGTH_SHORT).show();
+                    } else {
+                        Toast.makeText(MainActivity.this, "Backend object not ready: " + value, Toast.LENGTH_LONG).show();
+                    }
+                });
     }
 
     private void requestStoragePermissions() {

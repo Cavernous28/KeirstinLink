@@ -28,6 +28,20 @@ async function bridgeHttp(command, payload) {
   const port = window.KeirstinLinkBackend.port || (window.AndroidBridge ? window.AndroidBridge.getBackendPort() : 3710);
   const base = `http://${host}:${port}`;
 
+  // Test connection once per page load if not yet verified
+  if (!isTauri && !window._klBackendVerified) {
+    try {
+      const test = await fetch(`${base}/health`, { method: 'GET', mode: 'cors', cache: 'no-store' });
+      if (!test.ok) throw new Error('health check failed');
+      window._klBackendVerified = true;
+      setStatus(`Connected to ${host}:${port}`, 3);
+    } catch (e) {
+      window._klBackendVerified = false;
+      setError(`Cannot reach ${host}:${port}. Check IP and that PC backend is running.`);
+      throw new Error(`Cannot reach backend at ${host}:${port}: ${errorMessage(e)}`);
+    }
+  }
+
   const formFor = (obj) => {
     const params = new URLSearchParams();
     for (const [k, v] of Object.entries(obj)) {
@@ -155,6 +169,14 @@ function setStatus(msg, lockSeconds = 2) {
   if (now < statusLockedUntil) return;
   $('#status').textContent = msg;
   statusLockedUntil = now + lockSeconds * 1000;
+  // On mobile, keep recent messages visible longer
+  if (!isTauri) {
+    const el = $('#status');
+    if (el) {
+      el.classList.add('status-active');
+      setTimeout(() => el.classList.remove('status-active'), Math.max(lockSeconds * 1000, 3000));
+    }
+  }
 }
 
 function setStatusQuiet(msg) {
