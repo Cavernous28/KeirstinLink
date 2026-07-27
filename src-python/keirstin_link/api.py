@@ -106,6 +106,7 @@ def my_token() -> dict[str, Any]:
 
 @app.post("/pair")
 def pair_device(
+    request: Request,
     device_id: str = Form(...),
     token: str = Form(...),
 ) -> dict[str, Any]:
@@ -120,6 +121,8 @@ def pair_device(
         raise HTTPException(status_code=404, detail="Device not found")
     device.token = token
     device.last_seen = _now()
+    if request.client and request.client.host:
+        device.host = request.client.host
     DeviceStore.upsert_device(device)
     return {"master_token": DEVICE_TOKEN}
 

@@ -241,6 +241,7 @@ function renderDevices() {
         <p class="card-meta">${escapeHtml(d.host || 'unknown')}:${d.port || 0} • ${escapeHtml((d.capabilities || []).join(', ') || 'device')}</p>
         <p class="card-meta">Shared: ${escapeHtml((d.shared_folders || []).join(', ') || 'all')}</p>
         <p class="card-meta">Roots: ${escapeHtml((d.sync_roots || []).map(r => r.local_path + (r.remote_prefix ? ' → ' + r.remote_prefix : '')).join(', ') || 'none')}</p>
+        <p class="card-meta text-muted">ID: ${escapeHtml(d.id)} • Token: ${d.token ? 'set' : 'not set'}</p>
       </div>
       <div class="card-actions">
         <button class="btn" data-action="propose" data-id="${d.id}">Propose</button>
@@ -733,10 +734,20 @@ async function pairDevice(id) {
   if (!d) return setError('Device not found');
   setStatus(`Pairing with ${d.name || id}...`, 0);
   try {
-    // Fetch our own token from the local backend, then tell the remote master who we are.
-    const myTokenResp = await fetch('http://127.0.0.1:3710/my-token');
-    if (!myTokenResp.ok) throw new Error('Could not fetch local device token');
-    const { token } = await myTokenResp.json();
+    let token;
+    if (isTauri) {
+      const myTokenResp = await fetch('http://127.0.0.1:3710/my-token');
+      if (!myTokenResp.ok) throw new Error('Could not fetch local device token');
+      const data = await myTokenResp.json();
+      token = data.token;
+    } else {
+      // Mobile client: generate a token locally and persist it in localStorage.
+      token = localStorage.getItem('kl_device_token');
+      if (!token) {
+        token = generateDeviceToken();
+        localStorage.setItem('kl_device_token', token);
+      }
+    }
     await invoke('pair_device', { payload: { id, token } });
     await refresh();
     setStatus(`✨ Paired with ${d.name || id}`, 3);
@@ -744,6 +755,16 @@ async function pairDevice(id) {
     console.error(e);
     setError('Pairing failed: ' + errorMessage(e));
   }
+}
+
+function generateDeviceToken() {
+  const arr = new Uint8Array(32);
+  if (window.crypto && window.crypto.getRandomValues) {
+    window.crypto.getRandomValues(arr);
+  } else {
+    for (let i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256);
+  }
+  return btoa(String.fromCharCode(...arr)).replace(/[^a-zA-Z0-9]/g, '').slice(0, 43);
 }
 
 async function proposeDevice(id) {

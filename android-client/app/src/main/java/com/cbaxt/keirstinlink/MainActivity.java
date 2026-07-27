@@ -62,9 +62,9 @@ public class MainActivity extends AppCompatActivity {
             try {
                 String msg = android.util.Log.getStackTraceString(throwable);
                 android.util.Log.e("KeirstinLinkCrash", msg);
+                saveCrashLog(msg);
                 postCrash(msg);
             } catch (Exception ignored) {}
-            // Re-throw to let Android show the crash dialog / close app
             android.os.Process.killProcess(android.os.Process.myPid());
             System.exit(1);
         });
@@ -211,6 +211,16 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+
+    private void saveCrashLog(String trace) {
+        try {
+            java.io.File dir = getFilesDir();
+            java.io.File log = new java.io.File(dir, "keirstinlink_crash.log");
+            try (java.io.FileWriter fw = new java.io.FileWriter(log, true)) {
+                fw.write(new java.util.Date().toString() + "\n" + trace + "\n\n");
+            }
+        } catch (Exception ignored) {}
+    }
     private void postCrash(String trace) {
         new Thread(() -> {
             try {
