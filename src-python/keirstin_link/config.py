@@ -17,6 +17,7 @@ if sys.platform != "win32":
 DATA_DIR = Path(os.getenv("KL_DATA_DIR", str(default_data_dir)))
 MAX_VERSIONS = int(os.getenv("KL_MAX_VERSIONS", "3"))
 UDP_DISCOVERY_PORT = int(os.getenv("KL_UDP_PORT", "37100"))
+UDP_BUFFER = int(os.getenv("KL_UDP_BUFFER", "8192"))
 MDNS_SERVICE_NAME = os.getenv("KL_MDNS_NAME", "KeirstinLink")
 MDNS_SERVICE_TYPE = "_keirstinlink._tcp.local."
 

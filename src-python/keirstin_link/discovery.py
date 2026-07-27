@@ -14,6 +14,7 @@ from .config import (
     MDNS_SERVICE_NAME,
     MDNS_SERVICE_TYPE,
     PORT,
+    UDP_BUFFER,
     UDP_DISCOVERY_PORT,
 )
 from .models import DeviceInfo
