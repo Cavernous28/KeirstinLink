@@ -31,13 +31,15 @@ async function bridgeHttp(command, payload) {
   // Test connection once per page load if not yet verified
   if (!isTauri && !window._klBackendVerified) {
     try {
+      console.log('[bridgeHttp] checking', base + '/health');
       const test = await fetch(`${base}/health`, { method: 'GET', mode: 'cors', cache: 'no-store' });
-      if (!test.ok) throw new Error('health check failed');
+      if (!test.ok) throw new Error('health check failed with status ' + test.status);
       window._klBackendVerified = true;
       setStatus(`Connected to ${host}:${port}`, 3);
     } catch (e) {
       window._klBackendVerified = false;
-      setError(`Cannot reach ${host}:${port}. Check IP and that PC backend is running.`);
+      setError(`Cannot reach ${host}:${port}: ${errorMessage(e)}`);
+      console.error('[bridgeHttp] connection failed', e);
       throw new Error(`Cannot reach backend at ${host}:${port}: ${errorMessage(e)}`);
     }
   }
@@ -912,4 +914,4 @@ function init() {
   setInterval(refresh, 3000);
 }
 
-init();
+try { init(); } catch (e) { console.error('[top] init error', e); }

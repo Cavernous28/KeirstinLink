@@ -200,9 +200,18 @@
       const dbg = document.getElementById('debug-log');
       if (!dbg) return;
       if (!window.__TAURI__ && window.AndroidBridge) dbg.style.display = 'block';
+      function fmtArg(a) {
+        if (a instanceof Error) return a.name + ': ' + a.message + (a.stack ? ' | ' + a.stack.split('\n').slice(0,2).join(' ') : '');
+        if (typeof a === 'object') {
+          try { return JSON.stringify(a); } catch (e) {
+            try { return 'ErrorObject: ' + (a.message || a.statusText || a.toString()); } catch (_) { return '[object]'; }
+          }
+        }
+        return String(a);
+      }
       function logIt(kind, args) {
         const line = document.createElement('div');
-        line.textContent = '[' + kind + '] ' + Array.from(args).map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+        line.textContent = '[' + kind + '] ' + Array.from(args).map(fmtArg).join(' ');
         dbg.appendChild(line);
         dbg.scrollTop = dbg.scrollHeight;
       }
