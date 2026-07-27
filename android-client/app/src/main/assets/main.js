@@ -24,8 +24,8 @@ async function invoke(command, payload = {}) {
 
 async function bridgeHttp(command, payload) {
   // Map Tauri command names to backend HTTP endpoints + form fields
-  const host = window.KeirstinLinkBackend.host;
-  const port = window.KeirstinLinkBackend.port;
+  const host = window.KeirstinLinkBackend.host || (window.AndroidBridge ? window.AndroidBridge.getBackendHost() : '127.0.0.1');
+  const port = window.KeirstinLinkBackend.port || (window.AndroidBridge ? window.AndroidBridge.getBackendPort() : 3710);
   const base = `http://${host}:${port}`;
 
   const formFor = (obj) => {
@@ -796,6 +796,20 @@ async function addDeviceByIp() {
 
 // Event wiring
 function init() {
+  // If running inside Android WebView, try to load saved backend host/port
+  try {
+    if (window.AndroidBridge && window.AndroidBridge.getBackendHost) {
+      const androidHost = window.AndroidBridge.getBackendHost();
+      const androidPort = window.AndroidBridge.getBackendPort();
+      if (androidHost) {
+        setBackend(androidHost, androidPort);
+        console.log('[init] Android backend host', androidHost, androidPort);
+      }
+    }
+  } catch (e) {
+    console.log('[init] not running under Android bridge');
+  }
+
   $$('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
 
   $('#btn-refresh').addEventListener('click', refresh);

@@ -16,6 +16,7 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.Toast;
@@ -102,9 +103,10 @@ public class MainActivity extends AppCompatActivity {
             } catch (NumberFormatException ignored) {
             }
         }
+        final String jsHost = escapeJs(backendHost);
         String url = "http://" + backendHost + ":" + backendPort + "/health";
         webView.evaluateJavascript(
-                "window.KeirstinLinkBackend && window.KeirstinLinkBackend.connect('" + backendHost + "', " + backendPort + ")",
+                "(function(){ if(window.KeirstinLinkBackend){ window.KeirstinLinkBackend.connect('" + jsHost + "', " + backendPort + "); return 'ok';} return 'no backend object'; })()",
                 null);
         Toast.makeText(this, "Connecting to " + backendHost + ":" + backendPort, Toast.LENGTH_SHORT).show();
     }
@@ -165,9 +167,10 @@ public class MainActivity extends AppCompatActivity {
         return result != null ? result : "unknown";
     }
 
-private String escapeJs(String s) {
+    private String escapeJs(String s) {
         return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "");
     }
+
     public class AndroidBridge {
         @JavascriptInterface
         public void showToast(String message) {
