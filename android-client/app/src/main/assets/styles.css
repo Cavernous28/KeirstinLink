@@ -567,3 +567,8 @@ button:disabled,
 button, .btn, input, select, .tab {
   min-height: 44px;
 }
+
+
+/* Mobile-only elements shown only in Android WebView */
+.mobile-only { display: none; }
+.mobile-active .mobile-only { display: flex; }

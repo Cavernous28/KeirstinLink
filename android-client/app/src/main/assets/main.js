@@ -849,13 +849,15 @@ function init() {
   // If running inside Android WebView, try to load saved backend host/port
   try {
     if (window.AndroidBridge && window.AndroidBridge.getBackendHost) {
+      document.body.classList.add('mobile-active');
       const androidHost = window.AndroidBridge.getBackendHost();
       const androidPort = window.AndroidBridge.getBackendPort();
       if (androidHost) {
         setBackend(androidHost, androidPort);
         console.log('[init] Android backend host', androidHost, androidPort);
+        // Don't auto-refresh here; wait for user to tap Connect so errors are visible
       } else {
-        setError('Tap Connect and enter PC IP:port');
+        setStatus('Tap Connect and enter PC IP:port', 5);
       }
     }
   } catch (e) {
