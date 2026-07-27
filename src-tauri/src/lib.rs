@@ -240,12 +240,55 @@ fn start_backend() -> Result<Option<Child>, String> {
 }
 
 fn kill_backend(state: &BackendState) {
+    // Best-effort kill of the child we spawned, plus any detached backend
+    // process identified by the PID file. PyInstaller --onefile spawns a
+    // child Python process, so on Windows we use taskkill /T to take the
+    // whole process tree.
     if let Ok(mut guard) = state.child.lock() {
-        if let Some(mut child) = guard.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+        if let Some(child) = guard.take() {
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                let pid = child.id();
+                let _ = Command::new("taskkill")
+                    .args(["/T", "/F", "/PID", &pid.to_string()])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .spawn()
+                    .and_then(|mut c| c.wait());
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
         }
     }
+    kill_backend_by_pid_file();
+}
+
+fn kill_backend_by_pid_file() {
+    let pid_path = pid_file();
+    let Some(pid) = std::fs::read_to_string(&pid_path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+    else {
+        return;
+    };
+    println!("[keirstinlink] terminating backend PID {} from pid file", pid);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &pid.to_string()])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .and_then(|mut c| c.wait());
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new("kill").args(["-9", &pid.to_string()]).spawn().and_then(|mut c| c.wait());
+    }
+    let _ = std::fs::remove_file(&pid_path);
 }
 
 fn http_get(path: &str) -> Result<serde_json::Value, String> {
@@ -437,6 +480,11 @@ fn get_folder_index() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+fn restart_discovery() -> Result<serde_json::Value, String> {
+    http_post_form("/discovery/restart", &[])
+}
+
+#[tauri::command]
 fn open_folder(path: String) -> Result<(), String> {
     tauri_plugin_opener::open_path(path, None::<&str>)
         .map_err(|e| format!("failed to open folder: {}", e))
@@ -475,6 +523,13 @@ fn sync_remote(payload: ByIdPayload) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // A second launch attempt arrived. Bring the existing window forward.
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(BackendState { child: Mutex::new(None) })
@@ -544,10 +599,16 @@ pub fn run() {
             // Window close hides to tray instead of exiting.
             if let Some(window) = app.get_webview_window("main") {
                 let win_clone = window.clone();
+                let app_clone = app.app_handle().clone();
                 window.on_window_event(move |event| {
                     if let WindowEvent::CloseRequested { api, .. } = event {
                         let _ = win_clone.hide();
                         api.prevent_close();
+                    }
+                    if let WindowEvent::Destroyed { .. } = event {
+                        if let Some(state) = app_clone.try_state::<BackendState>() {
+                            kill_backend(&state);
+                        }
                     }
                 });
             }
@@ -570,6 +631,7 @@ pub fn run() {
             sync_device,
             propose_device,
             get_folder_index,
+            restart_discovery,
             open_folder,
             pick_folder,
             connect_remote,

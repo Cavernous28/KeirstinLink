@@ -78,6 +78,12 @@
             <span id="discovered-count" class="badge">0</span>
           </div>
           <p class="hint">These KeirstinLink devices were seen on your local network. Add one to start syncing.</p>
+          <div class="manual-discovery">
+            <input type="text" id="manual-ip" placeholder="IP address (e.g. 192.168.1.42)" />
+            <input type="number" id="manual-port" value="3710" />
+            <button id="btn-add-by-ip" class="btn">Add by IP</button>
+          </div>
+          <button id="btn-restart-discovery" class="btn">🔄 Restart discovery</button>
           <div id="discovered-list" class="card-list">
             <p class="empty">No LAN devices discovered yet.</p>
           </div>

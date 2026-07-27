@@ -607,6 +607,37 @@ async function proposeDevice(id) {
   }
 }
 
+async function restartDiscovery() {
+  setStatus('Restarting discovery...', 0);
+  try {
+    const result = await invoke('restart_discovery');
+    await refresh();
+    const restarted = result && result.restarted;
+    setStatus(restarted ? '✨ Discovery restarted' : 'Discovery restart failed', 3);
+  } catch (e) {
+    console.error(e);
+    setError('Restart discovery failed: ' + errorMessage(e));
+  }
+}
+
+async function addDeviceByIp() {
+  const host = $('#manual-ip').value.trim();
+  const port = parseInt($('#manual-port').value || '3710', 10);
+  if (!host) return setStatus('Enter an IP address', 3);
+  setStatus(`Adding ${host}:${port}...`, 0);
+  try {
+    const resp = await fetch(`http://${host}:${port}/health`, { method: 'GET', mode: 'cors' });
+    if (!resp.ok) throw new Error(`No KeirstinLink at ${host}:${port}`);
+    const info = await resp.json();
+    const name = info.service || host;
+    await addDiscoveredDevice(name, host, port);
+    $('#manual-ip').value = '';
+  } catch (e) {
+    console.error(e);
+    setError('Add by IP failed: ' + errorMessage(e));
+  }
+}
+
 // Event wiring
 function init() {
   $$('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
@@ -624,6 +655,8 @@ function init() {
   $('#btn-approve-all').addEventListener('click', approveAll);
   $('#settings-form').addEventListener('submit', saveSettings);
   $('#device-form').addEventListener('submit', saveDevice);
+  $('#btn-add-by-ip').addEventListener('click', addDeviceByIp);
+  $('#btn-restart-discovery').addEventListener('click', restartDiscovery);
 
   document.addEventListener('click', e => {
     const btn = e.target.closest('[data-action]');

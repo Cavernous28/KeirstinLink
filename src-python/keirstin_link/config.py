@@ -2,6 +2,7 @@
 
 import json
 import os
+import socket
 import sys
 from pathlib import Path
 
@@ -27,6 +28,7 @@ SNAPSHOTS_DIR = DATA_DIR / "snapshots"
 DEVICE_REGISTRY = DATA_DIR / "devices.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 TOKEN_FILE = DATA_DIR / "device_token.json"
+INSTALL_ID_FILE = DATA_DIR / "install_id.json"
 PID_FILE = DATA_DIR / "keirstinlink.pid"
 
 PENDING_DIR.mkdir(parents=True, exist_ok=True)
@@ -48,6 +50,22 @@ def load_or_create_device_token() -> str:
     return token
 
 
+def load_or_create_install_id() -> str:
+    if INSTALL_ID_FILE.exists():
+        try:
+            data = json.loads(INSTALL_ID_FILE.read_text(encoding="utf-8"))
+            install_id = data.get("install_id", "")
+            if install_id:
+                return install_id
+        except (json.JSONDecodeError, OSError):
+            pass
+    import secrets
+    install_id = secrets.token_urlsafe(16)
+    INSTALL_ID_FILE.write_text(json.dumps({"install_id": install_id}), encoding="utf-8")
+    return install_id
+
+
 DEVICE_TOKEN = os.getenv("KL_DEVICE_TOKEN") or load_or_create_device_token()
+INSTALL_ID = load_or_create_install_id()
 
 DEFAULT_SYNC_FOLDER = str(Path.home() / "KeirstinLinkSync")

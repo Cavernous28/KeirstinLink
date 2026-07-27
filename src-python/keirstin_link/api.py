@@ -71,6 +71,16 @@ def _require_device_token(device: DeviceInfo, token: str | None) -> None:
         raise HTTPException(status_code=403, detail="Invalid device token")
 
 
+def _require_any_device_token(token: str) -> DeviceInfo:
+    """Return the paired device whose token matches. Raise 401/403 if none matches."""
+    if not token:
+        raise HTTPException(status_code=401, detail="Device token required")
+    for d in DeviceStore.list_devices():
+        if d.token and hmac.compare_digest(d.token, token):
+            return d
+    raise HTTPException(status_code=403, detail="Invalid device token")
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"status": "ok", "service": "KeirstinLink", "port": PORT}
@@ -441,6 +451,9 @@ def upload_chunk(
         device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
         if device:
             _require_device_token(device, token or None)
+        elif token:
+            # Caller supplied a token but no matching device id; still authenticate by token.
+            _require_any_device_token(token)
 
     chunk_dir = DATA_DIR / "upload_chunks" / relative_path.replace("/", "-").replace("\\", "-")
     chunk_dir.mkdir(parents=True, exist_ok=True)
@@ -664,8 +677,36 @@ async def propose_files(
     return {"proposed": proposed, "count": len(proposed)}
 
 
+def _resolve_source_device_name(source_device: str, token: str, request: Request) -> str:
+    """Return the friendliest name for the device sending this proposal.
+
+    If the supplied token matches a paired device, use that device's registered name.
+    Otherwise use the provided source_device name. Fallback to the request IP if nothing else.
+    """
+    if source_device:
+        device = next((d for d in DeviceStore.list_devices() if d.id == source_device), None)
+        if device and token:
+            try:
+                _require_device_token(device, token)
+                return device.name or device.id
+            except HTTPException:
+                pass
+    # Try matching by token alone (proposals sent from a paired device sometimes send name, sometimes id)
+    if token:
+        for d in DeviceStore.list_devices():
+            if d.token and hmac.compare_digest(d.token, token):
+                return d.name or d.id
+    # Accept the caller-provided name if given
+    if source_device:
+        return source_device
+    # Last resort: remote IP
+    client = request.client
+    return client.host if client and client.host else "unknown device"
+
+
 @app.post("/receive-proposal")
 def receive_proposal(
+    request: Request,
     relative_path: str = Form(...),
     action: str = Form(...),
     source_device: str = Form(""),
@@ -685,7 +726,8 @@ def receive_proposal(
     if not str(target_path).startswith(str(master_root.resolve())):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    source_name = source_device or None
+    source_name = _resolve_source_device_name(source_device, token, request)
+
     # Dedupe: if a pending change for the same relative_path + source already exists, return it
     for existing in PendingStore.list_changes(status=ChangeStatus.PENDING):
         if existing.relative_path == relative_path and existing.source_device == source_name:

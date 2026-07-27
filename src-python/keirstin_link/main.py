@@ -1,6 +1,7 @@
 """Entry point for KeirstinLink backend."""
 
 import argparse
+import os
 import signal
 import sys
 
@@ -42,18 +43,28 @@ def main() -> None:
     def shutdown(signum, frame) -> None:
         _remove_pid()
         set_discovery_service(None)
-        discovery.stop()
+        try:
+            discovery.stop()
+        except Exception:
+            pass
         sys.exit(0)
 
-    signal.signal(signal.SIGINT, shutdown)
-    signal.signal(signal.SIGTERM, shutdown)
+    try:
+        signal.signal(signal.SIGINT, shutdown)
+        signal.signal(signal.SIGTERM, shutdown)
+    except ValueError:
+        # signal.signal can fail on Windows for non-main threads; ignore safely.
+        pass
 
     try:
-        uvicorn.run(app, host=args.host, port=args.port)
+        uvicorn.run(app, host=args.host, port=args.port, log_config=None)
     finally:
         _remove_pid()
         set_discovery_service(None)
-        discovery.stop()
+        try:
+            discovery.stop()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

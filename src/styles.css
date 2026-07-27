@@ -452,6 +452,39 @@ html, body, #app {
   border-left: 4px solid #b71c1c;
 }
 
+.manual-discovery {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  align-items: center;
+}
+
+.manual-discovery input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 8px 12px;
+  font-size: 0.95rem;
+}
+
+.manual-discovery input[type="number"] {
+  width: 80px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 8px 12px;
+  font-size: 0.95rem;
+}
+
+.manual-discovery input:focus { outline: none; border-color: var(--accent); }
+
+#btn-restart-discovery {
+  margin-bottom: 12px;
+}
 
 button:disabled,
 .btn:disabled {
