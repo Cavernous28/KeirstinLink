@@ -33,6 +33,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 
 public class MainActivity extends AppCompatActivity {
     private static final int REQUEST_READ_STORAGE = 1001;
@@ -53,6 +57,17 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
+            try {
+                String msg = android.util.Log.getStackTraceString(throwable);
+                android.util.Log.e("KeirstinLinkCrash", msg);
+                postCrash(msg);
+            } catch (Exception ignored) {}
+            // Re-throw to let Android show the crash dialog / close app
+            android.os.Process.killProcess(android.os.Process.myPid());
+            System.exit(1);
+        });
 
         requestStoragePermissions();
 
@@ -193,6 +208,33 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface
         public int getBackendPort() {
             return backendPort;
+        }
+    }
+
+    private void postCrash(String trace) {
+        new Thread(() -> {
+            try {
+                String host = backendHost.isEmpty() ? "192.168.1.42" : backendHost;
+                URL url = new URL("http://" + host + ":" + backendPort + "/android-crash");
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(3000);
+                conn.setReadTimeout(3000);
+                String body = "trace=" + urlEncode(trace);
+                try (OutputStream out = conn.getOutputStream()) {
+                    out.write(body.getBytes(StandardCharsets.UTF_8));
+                }
+                conn.getResponseCode();
+            } catch (Exception ignored) {}
+        }).start();
+    }
+
+    private String urlEncode(String s) {
+        try {
+            return java.net.URLEncoder.encode(s, "UTF-8");
+        } catch (Exception e) {
+            return s;
         }
     }
 }

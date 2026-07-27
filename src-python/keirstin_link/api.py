@@ -86,6 +86,18 @@ def health() -> dict[str, Any]:
     return {"status": "ok", "service": "KeirstinLink", "port": PORT}
 
 
+@app.post("/android-crash")
+def android_crash(trace: str = Form("")) -> dict[str, Any]:
+    """Receive a crash stack trace from the Android client for debugging."""
+    from datetime import datetime
+    log_path = DATA_DIR / "android_crashes.log"
+    entry = f"[{datetime.now(timezone.utc).isoformat()}]\n{trace}\n{'='*40}\n"
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(entry)
+    print(f"[android-crash] logged crash to {log_path}")
+    return {"status": "logged"}
+
+
 @app.get("/my-token")
 def my_token() -> dict[str, Any]:
     """Return this device's pairing token. Only expose on localhost / trusted networks."""
