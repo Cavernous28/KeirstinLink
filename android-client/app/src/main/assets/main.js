@@ -304,7 +304,7 @@ function renderDevices() {
             <p class="card-meta">Tap to register this phone with the PC.</p>
           </div>
           <div class="card-actions">
-            <button class="btn success" id="btn-pair-master">Pair with PC</button>
+            <button class="btn success" id="btn-pair-master" onclick="window._pairMasterClicked=true; pairWithMaster().catch(err=>{setError('Pair with PC failed: '+errorMessage(err)); console.error(err);});">Pair with PC</button>
           </div>
         </div>`;
     }
@@ -788,13 +788,24 @@ async function resolveConflict(id, resolution) {
 }
 
 async function pairWithMaster() {
+  console.log('[pairWithMaster] called');
   const masterHost = backendHost;
   const masterPort = backendPort;
-  if (!masterHost) return setError('Enter the PC IP and tap Connect first');
-  const deviceName = (window.AndroidBridge && window.AndroidBridge.getDeviceName) ? window.AndroidBridge.getDeviceName() : 'ChrisPhone';
-  const safeName = deviceName.replace(/[^a-zA-Z0-9 _-]/g, '').slice(0, 40) || 'ChrisPhone';
+  console.log('[pairWithMaster] host/port', masterHost, masterPort);
+  if (!masterHost) {
+    console.log('[pairWithMaster] no host');
+    return setError('Enter the PC IP and tap Connect first');
+  }
+  let deviceName = 'ChrisPhone';
+  try {
+    if (window.AndroidBridge && window.AndroidBridge.getDeviceName) {
+      deviceName = window.AndroidBridge.getDeviceName();
+    }
+  } catch (e) { console.log('[pairWithMaster] getDeviceName failed', e); }
+  const safeName = String(deviceName).replace(/[^a-zA-Z0-9 _-]/g, '').slice(0, 40) || 'ChrisPhone';
   const baseId = safeName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
   const deviceId = `${baseId}-${Math.floor(Math.random() * 10000)}`;
+  console.log('[pairWithMaster] deviceId', deviceId, 'name', safeName);
   setStatus(`Registering ${deviceId} with ${masterHost}:${masterPort}...`, 0);
   try {
     let token = localStorage.getItem('kl_device_token');
@@ -809,9 +820,11 @@ async function pairWithMaster() {
     body.append('host', masterHost);
     body.append('port', String(masterPort));
     body.append('capabilities', 'mobile');
-    console.log('[pairWithMaster] POST', `http://${masterHost}:${masterPort}/pair`, deviceId);
-    const res = await fetch(`http://${masterHost}:${masterPort}/pair`, { method: 'POST', mode: 'cors', body });
+    const url = `http://${masterHost}:${masterPort}/pair`;
+    console.log('[pairWithMaster] POST', url, deviceId);
+    const res = await fetch(url, { method: 'POST', mode: 'cors', body });
     const resText = await res.text();
+    console.log('[pairWithMaster] response', res.status, resText.slice(0, 200));
     if (!res.ok) throw new Error(resText);
     const data = JSON.parse(resText);
     localStorage.setItem('kl_master_token', data.master_token || '');

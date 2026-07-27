@@ -75,6 +75,10 @@ public class MainActivity extends AppCompatActivity {
         requestStoragePermissions();
 
         serverInput = findViewById(R.id.serverInput);
+        loadBackendHost();
+        if (!backendHost.isEmpty()) {
+            serverInput.setText(backendHost + ":" + backendPort);
+        }
         Button btnConnect = findViewById(R.id.btnConnect);
         webView = findViewById(R.id.webview);
 
