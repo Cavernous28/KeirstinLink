@@ -791,7 +791,10 @@ async function pairWithMaster() {
   const masterHost = backendHost;
   const masterPort = backendPort;
   if (!masterHost) return setError('Enter the PC IP and tap Connect first');
-  const deviceId = SettingsStore_load('device_name') || ('mobile-' + Math.floor(Math.random() * 10000));
+  const deviceName = (window.AndroidBridge && window.AndroidBridge.getDeviceName) ? window.AndroidBridge.getDeviceName() : 'ChrisPhone';
+  const safeName = deviceName.replace(/[^a-zA-Z0-9 _-]/g, '').slice(0, 40) || 'ChrisPhone';
+  const baseId = safeName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+  const deviceId = `${baseId}-${Math.floor(Math.random() * 10000)}`;
   setStatus(`Registering ${deviceId} with ${masterHost}:${masterPort}...`, 0);
   try {
     let token = localStorage.getItem('kl_device_token');
@@ -799,25 +802,26 @@ async function pairWithMaster() {
       token = generateDeviceToken();
       localStorage.setItem('kl_device_token', token);
     }
-    const res = await fetch(`http://${masterHost}:${masterPort}/pair`, {
-      method: 'POST',
-      mode: 'cors',
-      body: new URLSearchParams({ device_id: deviceId, token, name: 'ChrisPhone', host: masterHost, port: String(masterPort), capabilities: 'mobile' })
-    });
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
+    const body = new URLSearchParams();
+    body.append('device_id', deviceId);
+    body.append('token', token);
+    body.append('name', safeName);
+    body.append('host', masterHost);
+    body.append('port', String(masterPort));
+    body.append('capabilities', 'mobile');
+    console.log('[pairWithMaster] POST', `http://${masterHost}:${masterPort}/pair`, deviceId);
+    const res = await fetch(`http://${masterHost}:${masterPort}/pair`, { method: 'POST', mode: 'cors', body });
+    const resText = await res.text();
+    if (!res.ok) throw new Error(resText);
+    const data = JSON.parse(resText);
     localStorage.setItem('kl_master_token', data.master_token || '');
+    localStorage.setItem('kl_device_id', deviceId);
     setStatus(`✨ Registered as ${deviceId}. Master token saved.`, 5);
     await refresh();
   } catch (e) {
-    console.error(e);
+    console.error('[pairWithMaster] error', e);
     setError('Register with PC failed: ' + errorMessage(e));
   }
-}
-
-function SettingsStore_load(key) {
-  // Best-effort read of current settings from state
-  return (state.settings || {})[key] || localStorage.getItem('kl_' + key) || '';
 }
 
 async function pairDevice(id) {
@@ -916,8 +920,9 @@ function init() {
       const androidPort = window.AndroidBridge.getBackendPort();
       if (androidHost) {
         setBackend(androidHost, androidPort);
-        console.log('[init] Android backend host', androidHost, androidPort);
-        // Don't auto-refresh here; wait for user to tap Connect so errors are visible
+        const input = $('#server-input');
+        if (input) input.value = `${androidHost}:${androidPort}`;
+        console.log('[init] Android backend host restored', androidHost, androidPort);
       } else {
         setStatus('Tap Connect and enter PC IP:port', 5);
       }

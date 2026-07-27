@@ -43,6 +43,9 @@ public class MainActivity extends AppCompatActivity {
     private static final int PICK_FILES_REQUEST = 1002;
     private WebView webView;
     private EditText serverInput;
+    private static final String PREFS_NAME = "KeirstinLinkPrefs";
+    private static final String KEY_BACKEND_HOST = "backend_host";
+    private static final String KEY_BACKEND_PORT = "backend_port";
     private String baseUrl = "https://appassets.androidplatform.net/assets/";
     private String backendHost = "";
     private int backendPort = 3710;
@@ -114,6 +117,17 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void loadBackendHost() {
+        android.content.SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        backendHost = prefs.getString(KEY_BACKEND_HOST, "");
+        backendPort = prefs.getInt(KEY_BACKEND_PORT, 3710);
+    }
+
+    private void saveBackendHost(String host, int port) {
+        android.content.SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        prefs.edit().putString(KEY_BACKEND_HOST, host).putInt(KEY_BACKEND_PORT, port).apply();
+    }
+
     private void connectToBackend() {
         String raw = serverInput.getText().toString().trim();
         if (raw.isEmpty()) {
@@ -136,6 +150,7 @@ public class MainActivity extends AppCompatActivity {
                 "(function(){ if(window.KeirstinLinkBackend){ window.KeirstinLinkBackend.connect('" + jsHost + "', " + jsPort + "); return 'ok';} return 'no backend object'; })()",
                 value -> {
                     if ("ok".equals(value) || "\"ok\"".equals(value)) {
+                        saveBackendHost(backendHost, backendPort);
                         Toast.makeText(MainActivity.this, "Backend set to " + backendHost + ":" + backendPort, Toast.LENGTH_SHORT).show();
                     } else {
                         Toast.makeText(MainActivity.this, "Backend object not ready: " + value, Toast.LENGTH_LONG).show();
