@@ -572,3 +572,6 @@ button, .btn, input, select, .tab {
 /* Mobile-only elements shown only in Android WebView */
 .mobile-only { display: none; }
 .mobile-active .mobile-only { display: flex; }
+
+
+.primary-card { border: 2px solid #58f5d1; background: rgba(88, 245, 209, 0.08); }

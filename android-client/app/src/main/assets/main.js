@@ -31,7 +31,7 @@ async function bridgeHttp(command, payload) {
   // Test connection once per page load if not yet verified
   if (!isTauri && !window._klBackendVerified) {
     try {
-      console.log('[bridgeHttp] checking', base + '/health');
+      console.log('[bridgeHttp] checking', `${base}/health`);
       const test = await fetch(`${base}/health`, { method: 'GET', mode: 'cors', cache: 'no-store' });
       if (!test.ok) throw new Error('health check failed with status ' + test.status);
       window._klBackendVerified = true;
@@ -119,7 +119,15 @@ async function bridgeHttp(command, payload) {
       return await res.json();
     }
     case 'pair_device': {
-      const res = await fetch(`${base}/pair`, { method: 'POST', body: formFor({ device_id: payload.id, token: payload.token }) });
+      const body = {
+        device_id: payload.id,
+        token: payload.token,
+        name: payload.name || payload.id,
+        host: payload.host || backendHost,
+        port: payload.port || backendPort,
+        capabilities: payload.capabilities || 'mobile',
+      };
+      const res = await fetch(`${base}/pair`, { method: 'POST', body: formFor(body) });
       if (!res.ok) throw new Error(await res.text());
       return await res.json();
     }
@@ -263,7 +271,7 @@ function renderDevices() {
     list.innerHTML = '<p class="empty">No devices yet. Click + Add Device to pair one.</p>';
     return;
   }
-  list.innerHTML = state.devices.map(d => `
+  const deviceCards = state.devices.map(d => `
     <div class="card">
       <div class="card-info">
         <p class="card-title">${escapeHtml(d.name || 'Unknown')}</p>
@@ -281,6 +289,27 @@ function renderDevices() {
       </div>
     </div>
   `).join('');
+  // On mobile, prepend a card representing the connected PC so user can pair/save it as master
+  let masterCard = '';
+  if (!isTauri && window.AndroidBridge) {
+    const pcHost = backendHost;
+    const pcPort = backendPort;
+    const alreadyMaster = state.devices.some(d => d.host === pcHost && d.port === pcPort && (d.capabilities || []).includes('master'));
+    if (!alreadyMaster) {
+      masterCard = `
+        <div class="card primary-card">
+          <div class="card-info">
+            <p class="card-title">This PC</p>
+            <p class="card-meta">${escapeHtml(pcHost)}:${pcPort} • master</p>
+            <p class="card-meta">Tap to register this phone with the PC.</p>
+          </div>
+          <div class="card-actions">
+            <button class="btn success" id="btn-pair-master">Pair with PC</button>
+          </div>
+        </div>`;
+    }
+  }
+  list.innerHTML = masterCard + deviceCards;
 }
 
 function renderDiscovered() {
@@ -756,6 +785,39 @@ async function resolveConflict(id, resolution) {
     console.error(e);
     setError('Resolve conflict failed: ' + errorMessage(e));
   }
+}
+
+async function pairWithMaster() {
+  const masterHost = backendHost;
+  const masterPort = backendPort;
+  if (!masterHost) return setError('Enter the PC IP and tap Connect first');
+  const deviceId = SettingsStore_load('device_name') || ('mobile-' + Math.floor(Math.random() * 10000));
+  setStatus(`Registering ${deviceId} with ${masterHost}:${masterPort}...`, 0);
+  try {
+    let token = localStorage.getItem('kl_device_token');
+    if (!token) {
+      token = generateDeviceToken();
+      localStorage.setItem('kl_device_token', token);
+    }
+    const res = await fetch(`http://${masterHost}:${masterPort}/pair`, {
+      method: 'POST',
+      mode: 'cors',
+      body: new URLSearchParams({ device_id: deviceId, token, name: 'ChrisPhone', host: masterHost, port: String(masterPort), capabilities: 'mobile' })
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    localStorage.setItem('kl_master_token', data.master_token || '');
+    setStatus(`✨ Registered as ${deviceId}. Master token saved.`, 5);
+    await refresh();
+  } catch (e) {
+    console.error(e);
+    setError('Register with PC failed: ' + errorMessage(e));
+  }
+}
+
+function SettingsStore_load(key) {
+  // Best-effort read of current settings from state
+  return (state.settings || {})[key] || localStorage.getItem('kl_' + key) || '';
 }
 
 async function pairDevice(id) {

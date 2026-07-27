@@ -109,18 +109,41 @@ def pair_device(
     request: Request,
     device_id: str = Form(...),
     token: str = Form(...),
+    name: str = Form(""),
+    host: str = Form(""),
+    port: int = Form(3710),
+    capabilities: str = Form(""),
 ) -> dict[str, Any]:
     """Pair with a remote device by storing its token.
 
-    This is called by the client toward the master: the client tells the master
-    "I am device_id and here is my token". The master stores the token and replies
-    with the master's own token so the client can authenticate back.
+    Called by a client toward the master: the client says "I am device_id and here is my token".
+    The master stores the token and replies with its own token so the client can authenticate back.
+    If the device does not yet exist on the master, it is created using the supplied metadata.
     """
     device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
     if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-    device.token = token
-    device.last_seen = _now()
+        # Auto-create the device record from the client's self-registration data
+        caps = [c.strip() for c in capabilities.split(",") if c.strip()] or ["mobile"]
+        device = DeviceInfo(
+            id=device_id,
+            name=name or device_id,
+            host=host or (request.client.host if request.client else "127.0.0.1"),
+            port=port,
+            capabilities=caps,
+            token=token,
+            last_seen=_now(),
+            sync_roots=[],
+            shared_folders=["*"],
+        )
+    else:
+        device.token = token
+        device.last_seen = _now()
+    if host:
+        device.host = host
+    if port:
+        device.port = port
+    if name:
+        device.name = name
     if request.client and request.client.host:
         device.host = request.client.host
     DeviceStore.upsert_device(device)
