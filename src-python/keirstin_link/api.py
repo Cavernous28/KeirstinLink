@@ -763,10 +763,16 @@ def receive_proposal(
     # Conflict detection: for updates, if master file exists and has a different checksum, flag it.
     conflict = False
     current_checksum: str | None = None
+    current_size = 0
     if action == "update" and target_path.exists():
         current_checksum = _hash_file(target_path)
+        current_size = target_path.stat().st_size
         if proposed_checksum and proposed_checksum != current_checksum:
             conflict = True
+    if action == "delete" and target_path.exists():
+        current_size = target_path.stat().st_size
+
+    incoming_size = upload_dest.stat().st_size if upload_dest and upload_dest.exists() else 0
 
     change = ProposedChange(
         id=change_id,
@@ -777,6 +783,8 @@ def receive_proposal(
         payload={
             "relative_path": relative_path,
             "action": action,
+            "size": incoming_size,
+            "original_size": current_size,
             "uploaded_filename": str(upload_dest) if upload_dest else None,
             "target_filename": str(target_path),
             "original_exists": target_path.exists(),

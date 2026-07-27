@@ -156,11 +156,20 @@ function renderPending() {
     const actionClass = a.action === 'delete' ? 'danger' : (a.action === 'update' ? 'warning' : 'success');
     const conflict = payload.conflict;
     const conflictBadge = conflict ? '<span class="badge danger">CONFLICT</span> ' : '';
+
+    const incomingSize = formatBytes(payload.size || 0);
+    const masterSize = formatBytes(payload.original_size || 0);
+    const sizeInfo = a.action === 'delete'
+      ? `<span class="text-muted">will delete master file (${masterSize})</span>`
+      : (conflict
+        ? `<span class="text-warning">Incoming ${incomingSize}</span> vs <span class="text-muted">Master ${masterSize}</span>`
+        : `<span class="text-muted">incoming ${incomingSize}</span>`);
+
     const actions = conflict
       ? `
-        <button class="btn success" data-action="resolve" data-id="${a.id}" data-resolution="accept">Accept Incoming</button>
-        <button class="btn" data-action="resolve" data-id="${a.id}" data-resolution="keep">Keep Master</button>
-        <button class="btn danger" data-action="resolve" data-id="${a.id}" data-resolution="reject">Reject</button>
+        <button class="btn success" data-action="resolve" data-id="${a.id}" data-resolution="accept" title="Overwrite master with incoming">Accept Incoming</button>
+        <button class="btn" data-action="resolve" data-id="${a.id}" data-resolution="keep" title="Keep current master file">Keep Master</button>
+        <button class="btn danger" data-action="resolve" data-id="${a.id}" data-resolution="reject" title="Reject and discard incoming">Reject</button>
       `
       : `
         <button class="btn success" data-action="approve" data-id="${a.id}" data-approve="true">Approve</button>
@@ -171,7 +180,8 @@ function renderPending() {
       <div class="card-info">
         <p class="card-title">${escapeHtml(a.file_id || 'Unknown')}</p>
         <p class="card-meta">${conflictBadge}<span class="badge ${actionClass}">${escapeHtml(actionLabel)}</span> ${escapeHtml(a.source_device || 'unknown device')} → ${escapeHtml(targetDisplay)}</p>
-        <p class="card-meta">${escapeHtml(a.id)}</p>
+        <p class="card-meta">${sizeInfo}</p>
+        <p class="card-meta text-muted">${escapeHtml(a.id)}</p>
       </div>
       <div class="card-actions">
         ${actions}
@@ -415,11 +425,21 @@ function addSyncRootRow() {
   const row = document.createElement('div');
   row.className = 'sync-root-row';
   row.innerHTML = `
-    <input type="text" class="sync-root-local" placeholder="Local folder path" />
-    <span class="sync-root-arrow">→</span>
-    <input type="text" class="sync-root-remote" placeholder="Master prefix (e.g. obsidian)" />
-    <button type="button" class="btn icon btn-pick-sync-root" title="Pick folder">📁</button>
-    <button type="button" class="btn icon btn-remove-sync-root" title="Remove">×</button>
+    <div class="sync-root-fields">
+      <div class="sync-root-field">
+        <label>Local folder on this device</label>
+        <div class="sync-root-input-group">
+          <input type="text" class="sync-root-local" placeholder="C:\Users\me\Obsidian" />
+          <button type="button" class="btn icon btn-pick-sync-root" title="Pick folder">📁</button>
+        </div>
+      </div>
+      <div class="sync-root-field">
+        <label>Master prefix (optional)</label>
+        <input type="text" class="sync-root-remote" placeholder="e.g. obsidian / phone-photos" />
+      </div>
+      <button type="button" class="btn icon btn-remove-sync-root" title="Remove">×</button>
+    </div>
+    <p class="sync-root-hint">Files from the local folder will appear under <code>KeirstinLinkSync/[prefix]/</code> on the master.</p>
   `;
   container.appendChild(row);
 }

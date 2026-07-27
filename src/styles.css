@@ -491,3 +491,7 @@ button:disabled,
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+/* Utility text colors */
+.text-warning { color: #fbbf24; }
+.text-muted { color: var(--muted); }
