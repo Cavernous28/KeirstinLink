@@ -1,0 +1,13 @@
+[Unit]
+Description=KeirstinLink Python backend
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -m keirstin_link.main --host 127.0.0.1 --port 3710
+WorkingDirectory=%h/KeirstinLink/src-python
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
