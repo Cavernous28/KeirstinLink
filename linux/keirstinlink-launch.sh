@@ -7,9 +7,9 @@ set -e
 REPO_DIR="${KEIRSTINLINK_DIR:-$HOME/KeirstinLink}"
 VENV_DIR="$REPO_DIR/src-python/.venv"
 DATA_DIR="$HOME/.local/share/KeirstinLink"
-HOST="127.0.0.1"
+HOST="0.0.0.0"
 PORT="3710"
-URL="http://${HOST}:${PORT}"
+URL="http://127.0.0.1:${PORT}"
 
 mkdir -p "$DATA_DIR"
 
