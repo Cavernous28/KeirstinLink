@@ -1,0 +1,4 @@
+# Ensure Linux shell scripts and systemd units always use LF line endings,
+# even when checked out on Windows, so they can run on Bazzite/Fedora/Arch.
+linux/*.sh text eol=lf
+linux/*.service text eol=lf
