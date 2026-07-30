@@ -19,7 +19,9 @@ async function invoke(command, payload = {}) {
     const { invoke: tauriInvoke } = window.__TAURI__.core;
     return tauriInvoke(command, payload);
   }
-  return bridgeHttp(command, payload);
+  // Web UI callers wrap args in { payload: ... } for Tauri compatibility; unwrap for HTTP bridge.
+  const args = payload && payload.payload ? payload.payload : payload;
+  return bridgeHttp(command, args);
 }
 
 async function bridgeHttp(command, payload) {
