@@ -279,8 +279,8 @@ async def scan_local(
             async with httpx.AsyncClient(timeout=10.0) as client:
                 params = {}
                 if device.token:
-                    params["device_id"] = SettingsStore.load().device_name or "client"
-                    params["token"] = device.token
+                    params["device_id"] = device.id
+                    params["token"] = DEVICE_TOKEN
                 resp = await client.get(f"{base_url}/folder-index", params=params)
                 resp.raise_for_status()
                 remote_index = resp.json()
@@ -568,8 +568,8 @@ async def pull_device(device_id: str = Form(...), remote_index_json: str = Form(
             async with httpx.AsyncClient(timeout=10.0) as client:
                 params = {}
                 if device.token:
-                    params["device_id"] = SettingsStore.load().device_name or "client"
-                    params["token"] = device.token
+                    params["device_id"] = device.id
+                    params["token"] = DEVICE_TOKEN
                 resp = await client.get(f"{base_url}/folder-index", params=params)
                 resp.raise_for_status()
                 remote_index = resp.json()
@@ -602,8 +602,8 @@ async def pull_device(device_id: str = Form(...), remote_index_json: str = Form(
                     safe_rel = remote_path.replace("\\", "/")
                     download_params = {"path": safe_rel}
                     if device.token:
-                        download_params["device_id"] = SettingsStore.load().device_name or "client"
-                        download_params["token"] = device.token
+                        download_params["device_id"] = device.id
+                        download_params["token"] = DEVICE_TOKEN
                     resp = await client.get(f"{base_url}/files/download", params=download_params)
                     resp.raise_for_status()
                     total_size = int(resp.headers.get("content-length", str(len(resp.content))))
@@ -678,7 +678,8 @@ async def propose_files(
                         "change_id": change_id,
                     }
                     if device.token:
-                        data["token"] = device.token
+                        data["device_id"] = device.id
+                        data["token"] = DEVICE_TOKEN
                     resp = await client.post(f"{base_url}/receive-proposal", data=data)
                     resp.raise_for_status()
                     proposed.append(resp.json())
@@ -717,7 +718,8 @@ async def propose_files(
                             "device_id": (None, source_device),
                         }
                         if device.token:
-                            chunk_fields["token"] = (None, device.token)
+                            chunk_fields["device_id"] = (None, device.id)
+                            chunk_fields["token"] = (None, DEVICE_TOKEN)
                         chunk_fields["file"] = (local_path.name, chunk, "application/octet-stream")
                         resp = await client.post(f"{base_url}/files/upload-chunk", files=chunk_fields)
                         resp.raise_for_status()
@@ -730,7 +732,8 @@ async def propose_files(
                     "assembled": (None, "true"),
                 }
                 if device.token:
-                    files["token"] = (None, device.token)
+                    files["device_id"] = (None, device.id)
+                    files["token"] = (None, DEVICE_TOKEN)
                 files["file"] = (local_path.name, b"", "application/octet-stream")
                 resp = await client.post(f"{base_url}/receive-proposal", files=files)
                 resp.raise_for_status()
