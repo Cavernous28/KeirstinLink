@@ -20,7 +20,12 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import DATA_DIR, DEVICE_TOKEN, MAX_VERSIONS, PORT, STATIC_DIR
 from .discovery import DiscoveryService, get_discovered_peers
-from .folder_index import index_sync_folder, rebuild_files_index
+from .folder_index import (
+    DEFAULT_IGNORE_PATTERNS,
+    _is_ignored,
+    index_sync_folder,
+    rebuild_files_index,
+)
 from .models import ChangeStatus, DeviceInfo, FileEntry, ProposedChange, SyncRoot
 from .settings_store import Settings, SettingsStore
 from .store import DeviceStore, FileStore, PendingStore, SnapshotStore
@@ -307,6 +312,8 @@ async def scan_local(
             continue
         for local_path in local_root.rglob("*"):
             if not local_path.is_file():
+                continue
+            if _is_ignored(local_path, local_root, DEFAULT_IGNORE_PATTERNS):
                 continue
             try:
                 stat = local_path.stat()

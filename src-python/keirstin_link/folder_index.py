@@ -1,5 +1,6 @@
 """Folder indexing and hash utilities."""
 
+import fnmatch
 import hashlib
 import json
 from datetime import datetime, timezone
@@ -11,6 +12,45 @@ from pydantic import BaseModel
 from .config import FILES_INDEX
 from .models import FileEntry
 from .settings_store import SettingsStore
+
+
+DEFAULT_IGNORE_PATTERNS = [
+    ".git",
+    ".gitignore",
+    "node_modules",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".cache",
+    ".tmp",
+    "*.tmp",
+    "*.log",
+    ".DS_Store",
+    "Thumbs.db",
+    ".idea",
+    ".vscode",
+    ".pytest_cache",
+    ".mypy_cache",
+    "*.pyc",
+    "*.pyo",
+    "dist",
+    "build",
+    "target",
+]
+
+
+def _is_ignored(path: Path, root: Path, patterns: list[str]) -> bool:
+    """Return True if any part of path matches an ignore pattern."""
+    try:
+        rel_parts = path.relative_to(root).parts
+    except ValueError:
+        return False
+    lower_parts = [p.lower() for p in rel_parts]
+    for part in lower_parts:
+        for pattern in patterns:
+            if fnmatch.fnmatch(part, pattern.lower()):
+                return True
+    return False
 
 
 class FolderIndexEntry(BaseModel):
@@ -33,7 +73,7 @@ def index_sync_folder(hash_files: bool = True) -> list[FolderIndexEntry]:
     root = SettingsStore.master_folder_path()
     entries = []
     for p in root.rglob("*"):
-        if p.is_file():
+        if p.is_file() and not _is_ignored(p, root, DEFAULT_IGNORE_PATTERNS):
             try:
                 stat = p.stat()
                 rel = str(p.relative_to(root)).replace("\\", "/")
@@ -55,7 +95,7 @@ def rebuild_files_index() -> list[FileEntry]:
     root = SettingsStore.sync_folder_path()
     entries = []
     for idx, p in enumerate(root.rglob("*")):
-        if p.is_file():
+        if p.is_file() and not _is_ignored(p, root, DEFAULT_IGNORE_PATTERNS):
             try:
                 stat = p.stat()
                 rel = str(p.relative_to(root)).replace("\\", "/")
