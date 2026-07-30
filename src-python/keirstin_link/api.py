@@ -16,8 +16,9 @@ import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
-from .config import DATA_DIR, DEVICE_TOKEN, MAX_VERSIONS, PORT
+from .config import DATA_DIR, DEVICE_TOKEN, MAX_VERSIONS, PORT, STATIC_DIR
 from .discovery import DiscoveryService, get_discovered_peers
 from .folder_index import index_sync_folder, rebuild_files_index
 from .models import ChangeStatus, DeviceInfo, FileEntry, ProposedChange, SyncRoot
@@ -48,6 +49,12 @@ def restart_discovery() -> dict[str, Any]:
 
 app = FastAPI(title="KeirstinLink", version="0.1.0")
 
+
+@app.get("/")
+def index() -> FileResponse:
+    return FileResponse(str(STATIC_DIR / "index.html"))
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -55,6 +62,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve the web UI static files from the repo src/ directory.
+# Explicit routes keep API endpoints reachable; root-relative paths in index.html match these.
+app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
+
+
+@app.get("/styles.css")
+def styles_css() -> FileResponse:
+    return FileResponse(str(STATIC_DIR / "styles.css"))
+
+
+@app.get("/main.js")
+def main_js() -> FileResponse:
+    return FileResponse(str(STATIC_DIR / "main.js"))
+
+
+@app.get("/")
+def index() -> FileResponse:
+    return FileResponse(str(STATIC_DIR / "index.html"))
 
 
 def _now() -> datetime:

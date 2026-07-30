@@ -281,11 +281,11 @@ function renderDevices() {
         <p class="card-meta text-muted">ID: ${escapeHtml(d.id)} • Token: ${d.token ? 'set' : 'not set'}</p>
       </div>
       <div class="card-actions">
-        <button class="btn" data-action="propose" data-id="${d.id}">Propose</button>
-        <button class="btn" data-action="sync" data-id="${d.id}">Sync</button>
-        <button class="btn" data-action="pair" data-id="${d.id}" ${d.token ? 'disabled title="Paired"' : ''}>${d.token ? 'Paired' : 'Pair'}</button>
-        <button class="btn" data-action="edit-device" data-id="${d.id}">Edit</button>
-        <button class="btn danger" data-action="remove-device" data-id="${d.id}">Remove</button>
+        <button class="btn" data-action="propose" data-id="${d.id}" ${d.id ? '' : 'disabled'}>Propose</button>
+        <button class="btn" data-action="sync" data-id="${d.id}" ${d.id ? '' : 'disabled'}>Sync</button>
+        <button class="btn" data-action="pair" data-id="${d.id}" ${d.id ? (d.token ? 'disabled title="Paired"' : '') : 'disabled'}>${d.token ? 'Paired' : 'Pair'}</button>
+        <button class="btn" data-action="edit-device" data-id="${d.id}" ${d.id ? '' : 'disabled'}>Edit</button>
+        <button class="btn danger" data-action="remove-device" data-id="${d.id}" ${d.id ? '' : 'disabled'}>Remove</button>
       </div>
     </div>
   `).join('');
@@ -551,7 +551,8 @@ function generateDeviceId(name) {
   return `${base}-${suffix}`;
 }
 
-function openEditDevice(id) {
+async function openEditDevice(id) {
+  if (!id) return setError('Cannot edit: device has no ID. Re-add the device.');
   const d = state.devices.find(x => x.id === id);
   if (!d) return;
   editingDeviceId = id;
@@ -694,9 +695,10 @@ async function refresh() {
   }
 
 async function removeDevice(id) {
+  if (!id) return setError('Cannot remove: device has no ID.');
   if (!confirm('Remove this device?')) return;
   try {
-    await invoke('remove_device', { payload: { id } });
+    await invoke('remove_device', { id });
     await refresh();
   } catch (e) {
     console.error(e);
@@ -735,6 +737,7 @@ async function approveAll() {
 }
 
 async function syncDevice(id) {
+  if (!id) return setError('Cannot sync: device has no ID. Re-add the device.');
   setStatus(`Syncing device ${id}...`, 0);
   try {
     const result = await invoke('sync_device', { payload: { id } });
@@ -840,6 +843,7 @@ async function pairWithMaster() {
 
 window.pairWithMaster = pairWithMaster;
 async function pairDevice(id) {
+  if (!id) return setError('Cannot pair: device has no ID. Re-add the device.');
   const d = state.devices.find(x => x.id === id);
   if (!d) return setError('Device not found');
   setStatus(`Pairing with ${d.name || id}...`, 0);
@@ -878,6 +882,7 @@ function generateDeviceToken() {
 }
 
 async function proposeDevice(id) {
+  if (!id) return setError('Cannot propose: device has no ID. Re-add the device.');
   setStatus(`Scanning + proposing changes for ${id}...`, 0);
   try {
     const result = await invoke('propose_device', { payload: { id } });

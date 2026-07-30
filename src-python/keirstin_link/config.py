@@ -35,6 +35,10 @@ PID_FILE = DATA_DIR / "keirstinlink.pid"
 PENDING_DIR.mkdir(parents=True, exist_ok=True)
 SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
+# Static web UI directory. In a packaged install this is next to src-python; in dev it's the repo src/.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+STATIC_DIR = Path(os.getenv("KL_STATIC_DIR", str(REPO_ROOT / "src")))
+
 
 def load_or_create_device_token() -> str:
     if TOKEN_FILE.exists():

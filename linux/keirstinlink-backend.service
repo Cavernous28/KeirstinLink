@@ -4,7 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 -m keirstin_link.main --host 127.0.0.1 --port 3710
+Environment="PATH=%h/KeirstinLink/src-python/.venv/bin:/usr/bin:/bin"
+ExecStart=%h/KeirstinLink/src-python/.venv/bin/python3 -m keirstin_link.main --host 127.0.0.1 --port 3710
 WorkingDirectory=%h/KeirstinLink/src-python
 Restart=on-failure
 RestartSec=5

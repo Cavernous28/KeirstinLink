@@ -161,6 +161,8 @@ class DeviceStore:
 
     @staticmethod
     def upsert_device(device: DeviceInfo) -> None:
+        if not device.id:
+            raise ValueError("Device id is required")
         devices = DeviceStore.list_devices()
         updated = False
         for i, d in enumerate(devices):
@@ -170,7 +172,12 @@ class DeviceStore:
                 break
         if not updated:
             devices.append(device)
-        _write_json(DEVICE_REGISTRY, {"devices": [d.model_dump() for d in devices]})
+        # Also dedupe by host:port, keeping the most recent record.
+        by_endpoint: dict[tuple[str, int], DeviceInfo] = {}
+        for d in devices:
+            key = (d.host, d.port)
+            by_endpoint[key] = d
+        _write_json(DEVICE_REGISTRY, {"devices": [d.model_dump() for d in by_endpoint.values()]})
 
     @staticmethod
     def remove_device(device_id: str) -> None:

@@ -5,7 +5,10 @@
 set -e
 
 REPO_DIR="$HOME/KeirstinLink"
-DATA_DIR="$HOME/.local/share/KeirstinLink/data"
+VENV_DIR="$REPO_DIR/src-python/.venv"
+DATA_DIR="$HOME/.local/share/KeirstinLink"
+
+mkdir -p "$DATA_DIR"
 
 echo "=== KeirstinLink Linux Install ==="
 
@@ -18,18 +21,19 @@ fi
 # Clone or update repo
 if [ -d "$REPO_DIR" ]; then
     echo "Updating existing KeirstinLink repo at $REPO_DIR..."
-    cd "$REPO_DIR" && git pull
+    cd "$REPO_DIR" && git pull || true
 else
     echo "Cloning KeirstinLink to $REPO_DIR..."
     git clone https://github.com/Cavernous28/KeirstinLink.git "$REPO_DIR"
 fi
 
-# Install Python dependencies
+# Install Python dependencies in a venv
 cd "$REPO_DIR/src-python"
-python3 -m pip install --user -r requirements.txt
-
-# Create data directory
-mkdir -p "$DATA_DIR"
+if [ ! -d "$VENV_DIR" ]; then
+    python3 -m venv "$VENV_DIR"
+fi
+"$VENV_DIR/bin/pip" install --upgrade pip
+"$VENV_DIR/bin/pip" install -r requirements.txt
 
 # Create default sync folders
 mkdir -p "$HOME/KeirstinLinkSync"

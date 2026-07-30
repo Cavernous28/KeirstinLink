@@ -58,7 +58,7 @@ class SyncRoot(BaseModel):
 
 
 class DeviceInfo(BaseModel):
-    id: str
+    id: str = Field(min_length=1)
     name: str
     host: str
     port: int
