@@ -10,7 +10,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from .config import FILES_INDEX
-from .models import FileEntry
+from .models import FileEntry, SyncRoot
 from .settings_store import SettingsStore
 
 
@@ -69,26 +69,51 @@ def _hash_file(path: Path, block_size: int = 65536) -> str:
     return hasher.hexdigest()
 
 
-def index_sync_folder(hash_files: bool = True) -> list[FolderIndexEntry]:
-    root = SettingsStore.master_folder_path()
+def index_sync_folder(hash_files: bool = True, roots: Optional[list[tuple[Path, str]]] = None) -> list[FolderIndexEntry]:
+    """Index files. If roots is provided, union multiple (path, remote_prefix) pairs."""
+    if roots is None:
+        roots = [(SettingsStore.master_folder_path(), "")]
     entries = []
-    for p in root.rglob("*"):
-        if p.is_file() and not _is_ignored(p, root, DEFAULT_IGNORE_PATTERNS):
-            try:
-                stat = p.stat()
-                rel = str(p.relative_to(root)).replace("\\", "/")
-                entries.append(
-                    FolderIndexEntry(
-                        relative_path=rel,
-                        name=p.name,
-                        size=stat.st_size,
-                        modified=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-                        checksum=_hash_file(p) if hash_files else None,
+    for root, remote_prefix in roots:
+        if not root.exists():
+            continue
+        for p in root.rglob("*"):
+            if p.is_file() and not _is_ignored(p, root, DEFAULT_IGNORE_PATTERNS):
+                try:
+                    stat = p.stat()
+                    rel_to_root = str(p.relative_to(root)).replace("\\", "/")
+                    rel = _join_prefix(rel_to_root, remote_prefix)
+                    entries.append(
+                        FolderIndexEntry(
+                            relative_path=rel,
+                            name=p.name,
+                            size=stat.st_size,
+                            modified=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                            checksum=_hash_file(p) if hash_files else None,
+                        )
                     )
-                )
-            except (OSError, ValueError):
-                continue
+                except (OSError, ValueError):
+                    continue
     return sorted(entries, key=lambda e: e.relative_path)
+
+
+def _join_prefix(rel_path: str, prefix: str) -> str:
+    if not prefix:
+        return rel_path
+    return f"{prefix.rstrip('/')}/{rel_path}"
+
+
+def master_index_roots() -> list[tuple[Path, str]]:
+    """Return (local_path, remote_prefix) tuples to expose when serving as master."""
+    settings = SettingsStore.load()
+    roots = settings.master_sync_roots
+    if not roots:
+        return [(SettingsStore.master_folder_path(), "")]
+    return [(Path(r.local_path).resolve(), _normalize_prefix(r.remote_prefix)) for r in roots]
+
+
+def _normalize_prefix(prefix: str) -> str:
+    return prefix.replace("\\", "/").strip("/")
 
 
 def rebuild_files_index() -> list[FileEntry]:

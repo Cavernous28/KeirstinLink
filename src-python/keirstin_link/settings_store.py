@@ -9,11 +9,17 @@ from pydantic import BaseModel, Field
 from .config import DEFAULT_SYNC_FOLDER, SETTINGS_FILE
 
 
+class SyncRoot(BaseModel):
+    local_path: str
+    remote_prefix: str = ""
+
+
 class Settings(BaseModel):
     device_name: str = "KeirstinLink Device"
     mode: str = "master"  # "master" or "client"
     sync_folder: str = DEFAULT_SYNC_FOLDER
     master_sync_folder: str = DEFAULT_SYNC_FOLDER
+    master_sync_roots: list[SyncRoot] = Field(default_factory=list)
 
 
 class SettingsStore:

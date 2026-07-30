@@ -24,6 +24,7 @@ from .folder_index import (
     DEFAULT_IGNORE_PATTERNS,
     _is_ignored,
     index_sync_folder,
+    master_index_roots,
     rebuild_files_index,
 )
 from .models import ChangeStatus, DeviceInfo, FileEntry, ProposedChange, SyncRoot
@@ -211,6 +212,7 @@ def save_settings(
     mode: str = Form("master"),
     sync_folder: str = Form(""),
     master_sync_folder: str = Form(""),
+    master_sync_roots_json: str = Form(""),
     restart_discovery_flag: str = Form("true"),
 ) -> dict[str, Any]:
     settings = SettingsStore.load()
@@ -226,6 +228,12 @@ def save_settings(
     if master_sync_folder:
         settings.master_sync_folder = master_sync_folder
         Path(master_sync_folder).mkdir(parents=True, exist_ok=True)
+    if master_sync_roots_json:
+        try:
+            raw_roots = json.loads(master_sync_roots_json)
+            settings.master_sync_roots = [SyncRoot(**r) for r in raw_roots]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid master_sync_roots_json")
     SettingsStore.save(settings)
     result = settings.model_dump()
     if name_changed and restart_discovery_flag.lower() not in {"false", "0", "no"}:
@@ -261,7 +269,8 @@ def folder_index(
         if device:
             _require_device_token(device, token or None)
     hash_files = quick not in ("1", "true", "yes")
-    return [e.model_dump() for e in index_sync_folder(hash_files=hash_files)]
+    roots = master_index_roots()
+    return [e.model_dump() for e in index_sync_folder(hash_files=hash_files, roots=roots)]
 
 
 @app.post("/scan-local")
