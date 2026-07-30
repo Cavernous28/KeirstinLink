@@ -245,25 +245,33 @@ def _hash_file(path: Path, block_size: int = 65536) -> str:
 def folder_index(
     device_id: str = "",
     token: str = "",
+    quick: str = "",
 ) -> list[dict[str, Any]]:
-    """Return the current contents of the sync folder with hashes."""
+    """Return the current contents of the sync folder with hashes.
+
+    Use `quick=1` to skip SHA-256 hashing and return only size + mtime.
+    """
     if device_id:
         device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
         if device:
             _require_device_token(device, token or None)
-    return [e.model_dump() for e in index_sync_folder()]
+    hash_files = quick not in ("1", "true", "yes")
+    return [e.model_dump() for e in index_sync_folder(hash_files=hash_files)]
 
 
 @app.post("/scan-local")
 async def scan_local(
     device_id: str = Form(...),
     remote_index_json: str = Form(""),
+    quick: str = Form("1"),
 ) -> dict[str, Any]:
     """Client: compare local sync folder against a remote master index and return a changeset to propose.
 
     If `remote_index_json` is provided, use it directly instead of fetching from the device.
-    Detects create, update, and delete operations.
+    Detects create, update, and delete operations. Use `quick=1` (default) to skip expensive
+    SHA-256 hashing when size and mtime match; set `quick=0` to force checksum verification.
     """
+    quick_mode = quick not in ("0", "false", "no")
     device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -276,8 +284,8 @@ async def scan_local(
     else:
         base_url = f"http://{device.host}:{device.port}"
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                params = {}
+            async with httpx.AsyncClient(timeout=30.0 if quick_mode else 120.0) as client:
+                params = {"quick": "1" if quick_mode else "0"}
                 if device.token:
                     params["device_id"] = device.id
                     params["token"] = DEVICE_TOKEN
@@ -308,12 +316,15 @@ async def scan_local(
                     continue
                 local_rels.add(rel)
                 local_mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
-                local_checksum = _hash_file(local_path)
                 remote = remote_by_path.get(rel)
                 if not remote:
-                    changes.append({"relative_path": rel, "action": "create", "checksum": local_checksum, "size": stat.st_size, "modified": local_mtime})
-                elif remote.get("checksum") != local_checksum:
-                    changes.append({"relative_path": rel, "action": "update", "checksum": local_checksum, "size": stat.st_size, "modified": local_mtime})
+                    changes.append({"relative_path": rel, "action": "create", "checksum": None, "size": stat.st_size, "modified": local_mtime})
+                else:
+                    remote_mtime = remote.get("modified", "")
+                    remote_size = remote.get("size")
+                    if remote_size != stat.st_size or remote_mtime != local_mtime:
+                        local_checksum = None if quick_mode else _hash_file(local_path)
+                        changes.append({"relative_path": rel, "action": "update", "checksum": local_checksum, "size": stat.st_size, "modified": local_mtime})
             except (OSError, ValueError):
                 continue
 

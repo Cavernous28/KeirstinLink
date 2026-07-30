@@ -29,7 +29,7 @@ def _hash_file(path: Path, block_size: int = 65536) -> str:
     return hasher.hexdigest()
 
 
-def index_sync_folder() -> list[FolderIndexEntry]:
+def index_sync_folder(hash_files: bool = True) -> list[FolderIndexEntry]:
     root = SettingsStore.master_folder_path()
     entries = []
     for p in root.rglob("*"):
@@ -43,7 +43,7 @@ def index_sync_folder() -> list[FolderIndexEntry]:
                         name=p.name,
                         size=stat.st_size,
                         modified=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-                        checksum=_hash_file(p),
+                        checksum=_hash_file(p) if hash_files else None,
                     )
                 )
             except (OSError, ValueError):
