@@ -20,6 +20,7 @@ class Settings(BaseModel):
     sync_folder: str = DEFAULT_SYNC_FOLDER
     master_sync_folder: str = DEFAULT_SYNC_FOLDER
     master_sync_roots: list[SyncRoot] = Field(default_factory=list)
+    allow_sync_deletes: bool = False  # if False, sync only creates/updates; never proposes or applies deletes
 
 
 class SettingsStore:

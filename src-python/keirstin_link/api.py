@@ -213,6 +213,7 @@ def save_settings(
     sync_folder: str = Form(""),
     master_sync_folder: str = Form(""),
     master_sync_roots_json: str = Form(""),
+    allow_sync_deletes: str = Form(""),
     restart_discovery_flag: str = Form("true"),
 ) -> dict[str, Any]:
     settings = SettingsStore.load()
@@ -234,6 +235,8 @@ def save_settings(
             settings.master_sync_roots = [SyncRoot(**r) for r in raw_roots]
         except (json.JSONDecodeError, TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid master_sync_roots_json")
+    if allow_sync_deletes:
+        settings.allow_sync_deletes = allow_sync_deletes.lower() in {"1", "true", "yes"}
     SettingsStore.save(settings)
     result = settings.model_dump()
     if name_changed and restart_discovery_flag.lower() not in {"false", "0", "no"}:
@@ -345,11 +348,16 @@ async def scan_local(
                 continue
 
     # Detect deletions: files present on master but missing locally
-    for rel in remote_by_path:
-        if not device.sync_roots and not _is_under_shared_folders(rel, allowed):
-            continue
-        if rel not in local_rels:
-            changes.append({"relative_path": rel, "action": "delete"})
+    settings = SettingsStore.load()
+    if getattr(settings, "allow_sync_deletes", False):
+        for rel in remote_by_path:
+            if not device.sync_roots and not _is_under_shared_folders(rel, allowed):
+                continue
+            if rel not in local_rels:
+                changes.append({"relative_path": rel, "action": "delete"})
+    else:
+        # Safe mode: never propose deleting files from the master
+        pass
 
     return {"device_id": device_id, "changes": changes, "count": len(changes), "sync_roots": [r.model_dump() for r in device.sync_roots]}
 
@@ -822,6 +830,11 @@ def receive_proposal(
 
     source_name = _resolve_source_device_name(source_device, token, request)
 
+    # Safe sync: reject delete proposals unless explicitly allowed
+    settings = SettingsStore.load()
+    if action == "delete" and not getattr(settings, "allow_sync_deletes", False):
+        raise HTTPException(status_code=403, detail="Delete actions are disabled. Enable allow_sync_deletes in settings to permit deletes.")
+
     # Dedupe: if a pending change for the same relative_path + source already exists, return it
     for existing in PendingStore.list_changes(status=ChangeStatus.PENDING):
         if existing.relative_path == relative_path and existing.source_device == source_name:
@@ -1011,6 +1024,10 @@ def approve_all_changes() -> dict[str, Any]:
     failed = []
     for change in pending:
         try:
+            settings = SettingsStore.load()
+            if change.action == "delete" and not getattr(settings, "allow_sync_deletes", False):
+                failed.append({"id": change.id, "error": "Delete actions are disabled"})
+                continue
             updated = PendingStore.set_status(change.id, ChangeStatus.APPROVED)
             if updated:
                 _apply_approved_change(updated)

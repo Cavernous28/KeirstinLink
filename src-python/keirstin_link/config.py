@@ -35,9 +35,29 @@ PID_FILE = DATA_DIR / "keirstinlink.pid"
 PENDING_DIR.mkdir(parents=True, exist_ok=True)
 SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Static web UI directory. In a packaged install this is next to src-python; in dev it's the repo src/.
-REPO_ROOT = Path(__file__).resolve().parents[2]
-STATIC_DIR = Path(os.getenv("KL_STATIC_DIR", str(REPO_ROOT / "src")))
+# Static web UI directory. Resolution order:
+# 1. Explicit KL_STATIC_DIR env var.
+# 2. PyInstaller onefile extraction dir (sys._MEIPASS) where src/ is bundled.
+# 3. Installed dir next to the frozen .exe (e.g. C:\Program Files\KeirstinLink).
+# 4. Dev repo layout: repo/src/.
+def _resolve_static_dir() -> Path:
+    if os.getenv("KL_STATIC_DIR"):
+        return Path(os.getenv("KL_STATIC_DIR"))
+
+    if getattr(sys, "frozen", False):
+        # PyInstaller onefile: _MEIPASS is the temp extraction dir.
+        meipass = Path(getattr(sys, "_MEIPASS", ""))
+        if meipass and (meipass / "src" / "index.html").exists():
+            return meipass / "src"
+        # onefile companion dir (fallback): installed dir containing the .exe
+        exe_dir = Path(sys.executable).resolve().parent
+        if (exe_dir / "src" / "index.html").exists():
+            return exe_dir / "src"
+
+    # Dev layout: this file is under src-python/keirstin_link/, repo root is two parents up.
+    return Path(__file__).resolve().parents[2] / "src"
+
+STATIC_DIR = _resolve_static_dir()
 
 
 def load_or_create_device_token() -> str:

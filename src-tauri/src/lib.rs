@@ -113,34 +113,30 @@ fn pid_file() -> std::path::PathBuf {
     data_dir().join("keirstinlink.pid")
 }
 
-/// Read the PID file and, if the process is still alive, terminate it.
-/// This prevents duplicate backends when the user restarts the app.
+/// Terminate any previous KeirstinLink backend process tree.
+/// PyInstaller --onefile spawns a parent wrapper + a child Python process,
+/// so PID-based killing often leaves the child backend running as a zombie.
 fn kill_existing_backend() {
-    let pid_path = pid_file();
-    if !pid_path.exists() {
-        return;
-    }
-    let pid = match std::fs::read_to_string(&pid_path).ok().and_then(|s| s.trim().parse::<u32>().ok()) {
-        Some(p) => p,
-        None => return,
-    };
-    println!("[keirstinlink] terminating previous backend PID {}", pid);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        // Kill by image name with /T to take the whole process tree.
         let _ = Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/F"])
+            .args(["/F", "/T", "/IM", "keirstinlink_backend.exe"])
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .and_then(|mut c| c.wait());
     }
     #[cfg(not(windows))]
     {
-        let _ = Command::new("kill").args(["-9", &pid.to_string()]).spawn().and_then(|mut c| c.wait());
+        let _ = Command::new("pkill")
+            .args(["-9", "-f", "keirstinlink_backend"])
+            .spawn()
+            .and_then(|mut c| c.wait());
     }
     // Give the OS a moment to release the socket.
-    std::thread::sleep(Duration::from_millis(500));
-    let _ = std::fs::remove_file(&pid_path);
+    std::thread::sleep(Duration::from_millis(750));
+    let _ = std::fs::remove_file(pid_file());
 }
 
 fn wait_for_backend(deadline: Instant) -> Result<(), String> {
@@ -179,8 +175,16 @@ fn bundled_backend_exe() -> Option<std::path::PathBuf> {
 }
 
 fn start_backend() -> Result<Option<Child>, String> {
-    // Ensure only one backend instance exists. If a previous app left one
-    // running, terminate it before starting a fresh backend owned by this app.
+    // If a backend is already listening and healthy, reuse it. This avoids
+    // spawning duplicate instances and allows users to launch the backend
+    // manually for debugging.
+    let probe_deadline = Instant::now() + Duration::from_secs(2);
+    if wait_for_backend(probe_deadline).is_ok() {
+        println!("[keirstinlink] existing backend on {} is healthy; reusing", PY_BASE_URL);
+        return Ok(None);
+    }
+
+    // No healthy backend found; clear the way and start our own.
     kill_existing_backend();
 
     let (program, args, cwd): (String, Vec<String>, Option<std::path::PathBuf>);

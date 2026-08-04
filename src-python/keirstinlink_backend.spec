@@ -15,7 +15,10 @@ a = Analysis(
     ['keirstinlink_backend_entry.py'],
     pathex=[BUILD_VENV],
     binaries=[],
-    datas=[],
+    datas=[
+        # Bundle the web UI static assets into the onefile.
+        (os.path.join('..', 'src'), 'src'),
+    ],
     hiddenimports=[
         'keirstin_link.api',
         'keirstin_link.config',
