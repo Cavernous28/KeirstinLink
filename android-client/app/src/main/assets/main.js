@@ -105,6 +105,11 @@ async function bridgeHttp(command, payload) {
     }
     case 'approve_device': {
       const id = payload.id || payload;
+      if (id === '__all__' && payload.approved) {
+        const res = await fetch(`${base}/approve-all`, { method: 'POST' });
+        if (!res.ok) throw new Error(await res.text());
+        return await res.json();
+      }
       const url = payload.approved ? `${base}/approve` : `${base}/reject`;
       const res = await fetch(url, { method: 'POST', body: formFor({ change_id: id }) });
       if (!res.ok) throw new Error(await res.text());
