@@ -106,7 +106,7 @@ async function bridgeHttp(command, payload) {
       return await res.json();
     }
     case 'approve_device': {
-      const id = payload.id || payload;
+      const id = (payload.id || payload.change_id || payload).toString();
       if (id === '__all__' && payload.approved) {
         const res = await fetch(`${base}/approve-all`, { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
@@ -139,18 +139,22 @@ async function bridgeHttp(command, payload) {
       return await res.json();
     }
     case 'sync_device': {
-      const res = await fetch(`${base}/pull`, { method: 'POST', body: formFor({ device_id: payload.id }) });
+      const syncId = (payload.id || payload.device_id || '').toString();
+      if (!syncId) throw new Error('No device ID for sync');
+      const res = await fetch(`${base}/pull`, { method: 'POST', body: formFor({ device_id: syncId }) });
       if (!res.ok) throw new Error(await res.text());
       return await res.json();
     }
     case 'propose_device': {
-      const scan = await fetch(`${base}/scan-local`, { method: 'POST', body: formFor({ device_id: payload.id }) });
+      const proposeId = (payload.id || payload.device_id || '').toString();
+      if (!proposeId) throw new Error('No device ID for propose');
+      const scan = await fetch(`${base}/scan-local`, { method: 'POST', body: formFor({ device_id: proposeId }) });
       if (!scan.ok) throw new Error(await scan.text());
       const scanData = await scan.json();
       const changes = scanData.changes || [];
       const res = await fetch(`${base}/propose-files`, {
         method: 'POST',
-        body: formFor({ device_id: payload.id, changes_json: JSON.stringify(changes) })
+        body: formFor({ device_id: proposeId, changes_json: JSON.stringify(changes) })
       });
       if (!res.ok) throw new Error(await res.text());
       return await res.json();
@@ -890,6 +894,7 @@ function generateDeviceToken() {
 
 async function proposeDevice(id) {
   if (!id) return setError('Cannot propose: device has no ID. Re-add the device.');
+  console.log('[proposeDevice] id', id);
   setStatus(`Scanning + proposing changes for ${id}...`, 0);
   try {
     const result = await invoke('propose_device', { payload: { id } });

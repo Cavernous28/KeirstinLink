@@ -19,7 +19,9 @@ async function invoke(command, payload = {}) {
     const { invoke: tauriInvoke } = window.__TAURI__.core;
     return tauriInvoke(command, payload);
   }
-  return bridgeHttp(command, payload);
+  // Web UI callers wrap args in { payload: ... } for Tauri compatibility; unwrap for HTTP bridge.
+  const args = payload && payload.payload ? payload.payload : payload;
+  return bridgeHttp(command, args);
 }
 
 async function bridgeHttp(command, payload) {
@@ -104,7 +106,7 @@ async function bridgeHttp(command, payload) {
       return await res.json();
     }
     case 'approve_device': {
-      const id = payload.id || payload;
+      const id = (payload.id || payload.change_id || payload).toString();
       if (id === '__all__' && payload.approved) {
         const res = await fetch(`${base}/approve-all`, { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
@@ -137,18 +139,22 @@ async function bridgeHttp(command, payload) {
       return await res.json();
     }
     case 'sync_device': {
-      const res = await fetch(`${base}/pull`, { method: 'POST', body: formFor({ device_id: payload.id }) });
+      const syncId = (payload.id || payload.device_id || '').toString();
+      if (!syncId) throw new Error('No device ID for sync');
+      const res = await fetch(`${base}/pull`, { method: 'POST', body: formFor({ device_id: syncId }) });
       if (!res.ok) throw new Error(await res.text());
       return await res.json();
     }
     case 'propose_device': {
-      const scan = await fetch(`${base}/scan-local`, { method: 'POST', body: formFor({ device_id: payload.id }) });
+      const proposeId = (payload.id || payload.device_id || '').toString();
+      if (!proposeId) throw new Error('No device ID for propose');
+      const scan = await fetch(`${base}/scan-local`, { method: 'POST', body: formFor({ device_id: proposeId }) });
       if (!scan.ok) throw new Error(await scan.text());
       const scanData = await scan.json();
       const changes = scanData.changes || [];
       const res = await fetch(`${base}/propose-files`, {
         method: 'POST',
-        body: formFor({ device_id: payload.id, changes_json: JSON.stringify(changes) })
+        body: formFor({ device_id: proposeId, changes_json: JSON.stringify(changes) })
       });
       if (!res.ok) throw new Error(await res.text());
       return await res.json();
@@ -286,11 +292,11 @@ function renderDevices() {
         <p class="card-meta text-muted">ID: ${escapeHtml(d.id)} • Token: ${d.token ? 'set' : 'not set'}</p>
       </div>
       <div class="card-actions">
-        <button class="btn" data-action="propose" data-id="${d.id}">Propose</button>
-        <button class="btn" data-action="sync" data-id="${d.id}">Sync</button>
-        <button class="btn" data-action="pair" data-id="${d.id}" ${d.token ? 'disabled title="Paired"' : ''}>${d.token ? 'Paired' : 'Pair'}</button>
-        <button class="btn" data-action="edit-device" data-id="${d.id}">Edit</button>
-        <button class="btn danger" data-action="remove-device" data-id="${d.id}">Remove</button>
+        <button class="btn" data-action="propose" data-id="${d.id}" ${d.id ? '' : 'disabled'}>Propose</button>
+        <button class="btn" data-action="sync" data-id="${d.id}" ${d.id ? '' : 'disabled'}>Sync</button>
+        <button class="btn" data-action="pair" data-id="${d.id}" ${d.id ? (d.token ? 'disabled title="Paired"' : '') : 'disabled'}>${d.token ? 'Paired' : 'Pair'}</button>
+        <button class="btn" data-action="edit-device" data-id="${d.id}" ${d.id ? '' : 'disabled'}>Edit</button>
+        <button class="btn danger" data-action="remove-device" data-id="${d.id}" ${d.id ? '' : 'disabled'}>Remove</button>
       </div>
     </div>
   `).join('');
@@ -556,7 +562,8 @@ function generateDeviceId(name) {
   return `${base}-${suffix}`;
 }
 
-function openEditDevice(id) {
+async function openEditDevice(id) {
+  if (!id) return setError('Cannot edit: device has no ID. Re-add the device.');
   const d = state.devices.find(x => x.id === id);
   if (!d) return;
   editingDeviceId = id;
@@ -699,9 +706,10 @@ async function refresh() {
   }
 
 async function removeDevice(id) {
+  if (!id) return setError('Cannot remove: device has no ID.');
   if (!confirm('Remove this device?')) return;
   try {
-    await invoke('remove_device', { payload: { id } });
+    await invoke('remove_device', { id });
     await refresh();
   } catch (e) {
     console.error(e);
@@ -740,6 +748,7 @@ async function approveAll() {
 }
 
 async function syncDevice(id) {
+  if (!id) return setError('Cannot sync: device has no ID. Re-add the device.');
   setStatus(`Syncing device ${id}...`, 0);
   try {
     const result = await invoke('sync_device', { payload: { id } });
@@ -845,6 +854,7 @@ async function pairWithMaster() {
 
 window.pairWithMaster = pairWithMaster;
 async function pairDevice(id) {
+  if (!id) return setError('Cannot pair: device has no ID. Re-add the device.');
   const d = state.devices.find(x => x.id === id);
   if (!d) return setError('Device not found');
   setStatus(`Pairing with ${d.name || id}...`, 0);
@@ -883,6 +893,8 @@ function generateDeviceToken() {
 }
 
 async function proposeDevice(id) {
+  if (!id) return setError('Cannot propose: device has no ID. Re-add the device.');
+  console.log('[proposeDevice] id', id);
   setStatus(`Scanning + proposing changes for ${id}...`, 0);
   try {
     const result = await invoke('propose_device', { payload: { id } });
