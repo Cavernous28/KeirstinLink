@@ -107,6 +107,7 @@ async function bridgeHttp(command, payload) {
     }
     case 'approve_device': {
       const id = (payload.id || payload.change_id || payload).toString();
+      console.log('[bridge approve_device] id', id, 'approved', payload.approved, 'payload', payload);
       if (id === '__all__' && payload.approved) {
         const res = await fetch(`${base}/approve-all`, { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
@@ -147,6 +148,7 @@ async function bridgeHttp(command, payload) {
     }
     case 'propose_device': {
       const proposeId = (payload.id || payload.device_id || payload || '').toString();
+      console.log('[bridge propose_device] raw payload', JSON.stringify(payload), 'proposeId', proposeId);
       if (!proposeId) throw new Error('No device ID for propose');
       const scan = await fetch(`${base}/scan-local`, { method: 'POST', body: formFor({ device_id: proposeId }) });
       if (!scan.ok) throw new Error(await scan.text());
@@ -728,6 +730,7 @@ async function approve(id, approved) {
 }
 
 async function approveAll() {
+  console.log('[approveAll] pending', state.pending.length);
   if (!state.pending.length) return setStatus('No pending approvals', 3);
   if (!confirm(`Approve all ${state.pending.length} pending file(s)?`)) return;
   setStatus(`Approving ${state.pending.length} change(s)...`, 0);
@@ -893,8 +896,8 @@ function generateDeviceToken() {
 }
 
 async function proposeDevice(id) {
+  console.log('[proposeDevice] called id=', id, 'type=', typeof id);
   if (!id) return setError('Cannot propose: device has no ID. Re-add the device.');
-  console.log('[proposeDevice] id', id);
   setStatus(`Scanning + proposing changes for ${id}...`, 0);
   try {
     const result = await invoke('propose_device', { payload: { id } });
