@@ -139,14 +139,14 @@ async function bridgeHttp(command, payload) {
       return await res.json();
     }
     case 'sync_device': {
-      const syncId = (payload.id || payload.device_id || '').toString();
+      const syncId = (payload.id || payload.device_id || payload || '').toString();
       if (!syncId) throw new Error('No device ID for sync');
       const res = await fetch(`${base}/pull`, { method: 'POST', body: formFor({ device_id: syncId }) });
       if (!res.ok) throw new Error(await res.text());
       return await res.json();
     }
     case 'propose_device': {
-      const proposeId = (payload.id || payload.device_id || '').toString();
+      const proposeId = (payload.id || payload.device_id || payload || '').toString();
       if (!proposeId) throw new Error('No device ID for propose');
       const scan = await fetch(`${base}/scan-local`, { method: 'POST', body: formFor({ device_id: proposeId }) });
       if (!scan.ok) throw new Error(await scan.text());

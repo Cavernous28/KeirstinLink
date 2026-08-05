@@ -45,6 +45,13 @@ def _static_response(path: str) -> FileResponse:
     return FileResponse(str(path), headers=STATIC_HEADERS)
 
 
+def _serve_index() -> Response:
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    html = html.replace('href="styles.css"', 'href="styles.css?v=2"')
+    html = html.replace('src="main.js"', 'src="main.js?v=2"')
+    return Response(content=html, media_type="text/html", headers=STATIC_HEADERS)
+
+
 def set_discovery_service(service: DiscoveryService | None) -> None:
     global _discovery_service
     _discovery_service = service
@@ -95,8 +102,9 @@ def main_js() -> FileResponse:
 
 
 @app.get("/")
-def index() -> FileResponse:
-    return _static_response(str(STATIC_DIR / "index.html"))
+@app.get("/index.html")
+def index() -> Response:
+    return _serve_index()
 
 
 def _now() -> datetime:
@@ -298,6 +306,8 @@ async def scan_local(
     Detects create, update, and delete operations. Use `quick=1` (default) to skip expensive
     SHA-256 hashing when size and mtime match; set `quick=0` to force checksum verification.
     """
+    if not device_id:
+        raise HTTPException(status_code=400, detail="device_id required")
     quick_mode = quick not in ("0", "false", "no")
     device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
     if not device:
@@ -598,6 +608,8 @@ async def pull_device(device_id: str = Form(...), remote_index_json: str = Form(
 
     If `remote_index_json` is provided, use it directly instead of fetching from the device.
     """
+    if not device_id:
+        raise HTTPException(status_code=400, detail="device_id required")
     device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -690,6 +702,8 @@ async def propose_files(
 
     Large create/update proposals are uploaded in chunks to avoid loading whole files into memory.
     """
+    if not device_id:
+        raise HTTPException(status_code=400, detail="device_id required")
     device = next((d for d in DeviceStore.list_devices() if d.id == device_id), None)
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -930,12 +944,17 @@ def receive_proposal(
 
 @app.post("/approve")
 def approve_change(change_id: str = Form(...)) -> dict[str, Any]:
-    change = PendingStore.set_status(change_id, ChangeStatus.APPROVED)
+    change = PendingStore.get_change(change_id)
     if not change:
-        raise HTTPException(status_code=404, detail="Change not found")
-
-    _apply_approved_change(change)
-    return change.model_dump()
+        # Idempotent: already processed changes are a no-op.
+        return {"id": change_id, "status": "missing", "note": "Change already processed or removed"}
+    settings = SettingsStore.load()
+    if change.action == "delete" and not getattr(settings, "allow_sync_deletes", False):
+        raise HTTPException(status_code=403, detail="Delete actions are disabled")
+    updated = PendingStore.set_status(change_id, ChangeStatus.APPROVED)
+    if updated:
+        _apply_approved_change(updated)
+    return updated.model_dump() if updated else {"id": change_id, "status": "already_processed"}
 
 
 @app.post("/resolve-conflict")
@@ -1049,6 +1068,9 @@ def approve_all_changes() -> dict[str, Any]:
 
 @app.post("/reject")
 def reject_change(change_id: str = Form(...)) -> dict[str, Any]:
+    change = PendingStore.get_change(change_id)
+    if not change:
+        return {"id": change_id, "status": "missing", "note": "Change already processed or removed"}
     change = PendingStore.set_status(change_id, ChangeStatus.REJECTED)
     if not change:
         raise HTTPException(status_code=404, detail="Change not found")
