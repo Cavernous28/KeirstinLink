@@ -47,8 +47,8 @@ def _static_response(path: str) -> FileResponse:
 
 def _serve_index() -> Response:
     html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    html = html.replace('href="styles.css"', 'href="styles.css?v=3"')
-    html = html.replace('src="main.js"', 'src="main.js?v=3"')
+    html = html.replace('href="styles.css"', 'href="styles.css?v=4"')
+    html = html.replace('src="main.js"', 'src="main.js?v=4"')
     return Response(content=html, media_type="text/html", headers=STATIC_HEADERS)
 
 

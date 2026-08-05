@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>KeirstinLink</title>
-    <link rel="stylesheet" href="styles.css?v=3" />
+    <link rel="stylesheet" href="styles.css?v=4" />
   </head>
   <body>
     <div id="app">
@@ -193,13 +193,13 @@
         </div>
       </div>
     </div>
-    <script type="module" src="main.js?v=3"></script>
+    <script type="module" src="main.js?v=4"></script>
   <div id="debug-log" style="display:none;position:fixed;bottom:60px;left:8px;right:8px;max-height:150px;overflow:auto;background:rgba(0,0,0,0.85);color:#0f0;font-family:monospace;font-size:11px;padding:8px;border-radius:6px;z-index:1000;"></div>
   <script>
     (function(){
       const dbg = document.getElementById('debug-log');
       if (!dbg) return;
-      if (!window.__TAURI__ && window.AndroidBridge) dbg.style.display = 'block';
+      if (!window.__TAURI__) dbg.style.display = 'block';
       function fmtArg(a) {
         if (a instanceof Error) return a.name + ': ' + a.message + (a.stack ? ' | ' + a.stack.split('\n').slice(0,2).join(' ') : '');
         if (typeof a === 'object') {
