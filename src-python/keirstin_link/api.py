@@ -19,6 +19,10 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import DATA_DIR, DEVICE_TOKEN, MAX_VERSIONS, PORT, STATIC_DIR
+
+# Cache-busting headers for static UI files so updates take effect immediately.
+STATIC_HEADERS = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
+
 from .discovery import DiscoveryService, get_discovered_peers
 from .folder_index import (
     DEFAULT_IGNORE_PATTERNS,
@@ -27,12 +31,18 @@ from .folder_index import (
     master_index_roots,
     rebuild_files_index,
 )
-from .models import ChangeStatus, DeviceInfo, FileEntry, ProposedChange, SyncRoot
+
 from .settings_store import Settings, SettingsStore
 from .store import DeviceStore, FileStore, PendingStore, SnapshotStore
 
+from .models import ChangeStatus, DeviceInfo, FileEntry, ProposedChange, SyncRoot
+
 # Shared discovery service instance, managed by main.py. Settings reloads can restart it.
 _discovery_service: DiscoveryService | None = None
+
+
+def _static_response(path: str) -> FileResponse:
+    return FileResponse(str(path), headers=STATIC_HEADERS)
 
 
 def set_discovery_service(service: DiscoveryService | None) -> None:
@@ -76,17 +86,17 @@ app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="as
 
 @app.get("/styles.css")
 def styles_css() -> FileResponse:
-    return FileResponse(str(STATIC_DIR / "styles.css"))
+    return _static_response(str(STATIC_DIR / "styles.css"))
 
 
 @app.get("/main.js")
 def main_js() -> FileResponse:
-    return FileResponse(str(STATIC_DIR / "main.js"))
+    return _static_response(str(STATIC_DIR / "main.js"))
 
 
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(str(STATIC_DIR / "index.html"))
+    return _static_response(str(STATIC_DIR / "index.html"))
 
 
 def _now() -> datetime:
